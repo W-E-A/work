@@ -79,15 +79,15 @@ class PointPillarsScatter(nn.Module):
                 self.in_channels,
                 self.nx * self.ny,
                 dtype=voxel_features.dtype,
-                device=voxel_features.device)
+                device=voxel_features.device) # [C',W*H]
 
             # Only include non-empty pillars
             batch_mask = coors[:, 0] == batch_itt
-            this_coors = coors[batch_mask, :]
-            indices = this_coors[:, 2] * self.nx + this_coors[:, 3]
+            this_coors = coors[batch_mask, :] # [pls, 4] -> [bpls, 4] bpls batch pls size H*W
+            indices = this_coors[:, 2] * self.nx + this_coors[:, 3] # w * W + h = indices in batch pls
             indices = indices.type(torch.long)
-            voxels = voxel_features[batch_mask, :]
-            voxels = voxels.t()
+            voxels = voxel_features[batch_mask, :] # [bpls, C']
+            voxels = voxels.t() #[C', bpls]
 
             # Now scatter the blob back to the canvas.
             canvas[:, indices] = voxels

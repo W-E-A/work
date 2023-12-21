@@ -19,15 +19,15 @@ def get_paddings_indicator(actual_num: Tensor,
     Returns:
         torch.Tensor: Mask indicates which points are valid inside a voxel.
     """
-    actual_num = torch.unsqueeze(actual_num, axis + 1)
+    actual_num = torch.unsqueeze(actual_num, axis + 1) # [N, 1]
     # tiled_actual_num: [N, M, 1]
-    max_num_shape = [1] * len(actual_num.shape)
-    max_num_shape[axis + 1] = -1
+    max_num_shape = [1] * len(actual_num.shape) # [1, 1]
+    max_num_shape[axis + 1] = -1 # [1, -1]
     max_num = torch.arange(
-        max_num, dtype=torch.int, device=actual_num.device).view(max_num_shape)
+        max_num, dtype=torch.int, device=actual_num.device).view(max_num_shape) # [[0, ..., 32]]
     # tiled_actual_num: [[3,3,3,3,3], [4,4,4,4,4], [2,2,2,2,2]]
     # tiled_max_num: [[0,1,2,3,4], [0,1,2,3,4], [0,1,2,3,4]]
-    paddings_indicator = actual_num.int() > max_num
+    paddings_indicator = actual_num.int() > max_num # [N, 1] > [1, M] -> [N, M] {0,1} mask
     # paddings_indicator shape: [batch_size, max_num]
     return paddings_indicator
 
@@ -83,25 +83,25 @@ class VFELayer(nn.Module):
                     point-wise features in shape (N, M, C).
         """
         # [K, T, 7] tensordot [7, units] = [K, T, units]
-        voxel_count = inputs.shape[1]
+        voxel_count = inputs.shape[1] # M
 
-        x = self.linear(inputs)
+        x = self.linear(inputs) # [N, M, C] -> [N, M, out]
         x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2,
                                                                1).contiguous()
-        pointwise = F.relu(x)
+        pointwise = F.relu(x) # [N, M, out]
         # [K, T, units]
         if self.max_out:
-            aggregated = torch.max(pointwise, dim=1, keepdim=True)[0]
+            aggregated = torch.max(pointwise, dim=1, keepdim=True)[0] # [N, 1, out]
         else:
             # this is for fusion layer
-            return pointwise
+            return pointwise # [N, M, out]
 
         if not self.cat_max:
             return aggregated.squeeze(1)
         else:
             # [K, 1, units]
             repeated = aggregated.repeat(1, voxel_count, 1)
-            concatenated = torch.cat([pointwise, repeated], dim=2)
+            concatenated = torch.cat([pointwise, repeated], dim=2) # [N, M, out*2]
             # [K, T, 2 * units]
             return concatenated
 
@@ -162,15 +162,15 @@ class PFNLayer(nn.Module):
         Returns:
             torch.Tensor: Features of Pillars.
         """
-        x = self.linear(inputs)
+        x = self.linear(inputs) # [N, M, C]
         x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2,
-                                                               1).contiguous()
-        x = F.relu(x)
+                                                               1).contiguous() # batch norm 1d input N, C, M(2d H W)
+        x = F.relu(x) # [N, M, C']
 
         if self.mode == 'max':
             if aligned_distance is not None:
                 x = x.mul(aligned_distance.unsqueeze(-1))
-            x_max = torch.max(x, dim=1, keepdim=True)[0]
+            x_max = torch.max(x, dim=1, keepdim=True)[0] # [N, 1, C']
         elif self.mode == 'avg':
             if aligned_distance is not None:
                 x = x.mul(aligned_distance.unsqueeze(-1))
@@ -179,8 +179,8 @@ class PFNLayer(nn.Module):
                     -1, 1, 1)
 
         if self.last_vfe:
-            return x_max
+            return x_max # [N, 1, out_channel]
         else:
-            x_repeat = x_max.repeat(1, inputs.shape[1], 1)
-            x_concatenated = torch.cat([x, x_repeat], dim=2)
+            x_repeat = x_max.repeat(1, inputs.shape[1], 1) # [N, M, C']
+            x_concatenated = torch.cat([x, x_repeat], dim=2) # [N, M, C' + C] # equal to out_channel
             return x_concatenated

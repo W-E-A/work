@@ -109,7 +109,7 @@ class Det3DDataset(BaseDataset):
                 for i in range(len(self.METAINFO['classes']))
             }
             self.label_mapping[-1] = -1
-            for label_idx, name in enumerate(metainfo['classes']):
+            for label_idx, name in enumerate(metainfo['classes']): # 外部手动传入的metainfo，如果数量少于数据集预定的metainfo，则重新映射标签，而-1则被认为是-1也就是无效
                 ori_label = self.METAINFO['classes'].index(name)
                 self.label_mapping[ori_label] = label_idx
 

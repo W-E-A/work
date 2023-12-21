@@ -44,33 +44,33 @@ class PillarFeatureNet(nn.Module):
                  with_distance: Optional[bool] = False,
                  with_cluster_center: Optional[bool] = True,
                  with_voxel_center: Optional[bool] = True,
-                 voxel_size: Optional[Tuple[float]] = (0.2, 0.2, 4),
+                 voxel_size: Optional[Tuple[float]] = (0.2, 0.2, 4), # type: ignore
                  point_cloud_range: Optional[Tuple[float]] = (0, -40, -3, 70.4,
-                                                              40, 1),
+                                                              40, 1), # type: ignore
                  norm_cfg: Optional[dict] = dict(
                      type='BN1d', eps=1e-3, momentum=0.01),
                  mode: Optional[str] = 'max',
                  legacy: Optional[bool] = True):
         super(PillarFeatureNet, self).__init__()
-        assert len(feat_channels) > 0
+        assert len(feat_channels) > 0 # type: ignore
         self.legacy = legacy
         if with_cluster_center:
-            in_channels += 3
+            in_channels += 3 # type: ignore
         if with_voxel_center:
-            in_channels += 3
+            in_channels += 3 # type: ignore
         if with_distance:
-            in_channels += 1
+            in_channels += 1 # type: ignore
         self._with_distance = with_distance
         self._with_cluster_center = with_cluster_center
         self._with_voxel_center = with_voxel_center
         # Create PillarFeatureNet layers
         self.in_channels = in_channels
-        feat_channels = [in_channels] + list(feat_channels)
+        feat_channels = [in_channels] + list(feat_channels) # type: ignore
         pfn_layers = []
-        for i in range(len(feat_channels) - 1):
-            in_filters = feat_channels[i]
-            out_filters = feat_channels[i + 1]
-            if i < len(feat_channels) - 2:
+        for i in range(len(feat_channels) - 1): # type: ignore
+            in_filters = feat_channels[i] # type: ignore
+            out_filters = feat_channels[i + 1] # type: ignore
+            if i < len(feat_channels) - 2: # type: ignore
                 last_layer = False
             else:
                 last_layer = True
@@ -84,12 +84,12 @@ class PillarFeatureNet(nn.Module):
         self.pfn_layers = nn.ModuleList(pfn_layers)
 
         # Need pillar (voxel) size and x/y offset in order to calculate offset
-        self.vx = voxel_size[0]
-        self.vy = voxel_size[1]
-        self.vz = voxel_size[2]
-        self.x_offset = self.vx / 2 + point_cloud_range[0]
-        self.y_offset = self.vy / 2 + point_cloud_range[1]
-        self.z_offset = self.vz / 2 + point_cloud_range[2]
+        self.vx = voxel_size[0] # type: ignore
+        self.vy = voxel_size[1] # type: ignore
+        self.vz = voxel_size[2] # type: ignore
+        self.x_offset = self.vx / 2 + point_cloud_range[0] # the beginning of x_axis # type: ignore
+        self.y_offset = self.vy / 2 + point_cloud_range[1] # the beginning of y_axis # type: ignore
+        self.z_offset = self.vz / 2 + point_cloud_range[2] # the beginning of z_axis # type: ignore
         self.point_cloud_range = point_cloud_range
 
     def forward(self, features: Tensor, num_points: Tensor, coors: Tensor,
@@ -107,16 +107,18 @@ class PillarFeatureNet(nn.Module):
         """
         features_ls = [features]
         # Find distance of x, y, and z from cluster center
-        if self._with_cluster_center:
+        if self._with_cluster_center: # distance between point cluster center and pillar points
             points_mean = features[:, :, :3].sum(
                 dim=1, keepdim=True) / num_points.type_as(features).view(
-                    -1, 1, 1)
-            f_cluster = features[:, :, :3] - points_mean
-            features_ls.append(f_cluster)
+                    -1, 1, 1) # [N, M, 3] -> [N, 1, 3] / [N, 1, 1] -> [N, 1, 3]
+            f_cluster = features[:, :, :3] - points_mean # [N, M, 3] - [N, 1, 3] -> [N, M, 3]
+            features_ls.append(f_cluster) # [N, M, C],[N, M, 3]
 
         # Find distance of x, y, and z from pillar center
+        # coors order: zyx
+        # pillar x [0, 1, 2, ..., N] -> n * voxel_size_x + offset_x
         dtype = features.dtype
-        if self._with_voxel_center:
+        if self._with_voxel_center: # distance between pillar center and pillar points
             if not self.legacy:
                 f_center = torch.zeros_like(features[:, :, :3])
                 f_center[:, :, 0] = features[:, :, 0] - (
@@ -129,10 +131,10 @@ class PillarFeatureNet(nn.Module):
                     coors[:, 1].to(dtype).unsqueeze(1) * self.vz +
                     self.z_offset)
             else:
-                f_center = features[:, :, :3]
+                f_center = features[:, :, :3] # [N, M, 3]
                 f_center[:, :, 0] = f_center[:, :, 0] - (
                     coors[:, 3].type_as(features).unsqueeze(1) * self.vx +
-                    self.x_offset)
+                    self.x_offset) # [N, M, 1] - [N, 1, 1]
                 f_center[:, :, 1] = f_center[:, :, 1] - (
                     coors[:, 2].type_as(features).unsqueeze(1) * self.vy +
                     self.y_offset)
@@ -141,24 +143,24 @@ class PillarFeatureNet(nn.Module):
                     self.z_offset)
             features_ls.append(f_center)
 
-        if self._with_distance:
-            points_dist = torch.norm(features[:, :, :3], 2, 2, keepdim=True)
+        if self._with_distance: # distance between lidar center and pillar points
+            points_dist = torch.norm(features[:, :, :3], 2, 2, keepdim=True) # type: ignore # [N, M, 3] -> [N, M, 1]
             features_ls.append(points_dist)
 
         # Combine together feature decorations
-        features = torch.cat(features_ls, dim=-1)
+        features = torch.cat(features_ls, dim=-1) # [N, M, ?]
         # The feature decorations were calculated without regard to whether
         # pillar was empty. Need to ensure that
         # empty pillars remain set to zeros.
         voxel_count = features.shape[1]
-        mask = get_paddings_indicator(num_points, voxel_count, axis=0)
+        mask = get_paddings_indicator(num_points, voxel_count, axis=0) # [N, ], M # type: ignore
         mask = torch.unsqueeze(mask, -1).type_as(features)
-        features *= mask
+        features *= mask # [N, M, ?] * [N, M, 1] make sure invalid points equal to zero
 
         for pfn in self.pfn_layers:
             features = pfn(features, num_points)
 
-        return features.squeeze(1)
+        return features.squeeze(1) # [N, out_channel]
 
 
 @MODELS.register_module()
@@ -197,9 +199,9 @@ class DynamicPillarFeatureNet(PillarFeatureNet):
                  with_distance: Optional[bool] = False,
                  with_cluster_center: Optional[bool] = True,
                  with_voxel_center: Optional[bool] = True,
-                 voxel_size: Optional[Tuple[float]] = (0.2, 0.2, 4),
+                 voxel_size: Optional[Tuple[float]] = (0.2, 0.2, 4), # type: ignore
                  point_cloud_range: Optional[Tuple[float]] = (0, -40, -3, 70.4,
-                                                              40, 1),
+                                                              40, 1), # type: ignore
                  norm_cfg: Optional[dict] = dict(
                      type='BN1d', eps=1e-3, momentum=0.01),
                  mode: Optional[str] = 'max',
@@ -215,15 +217,15 @@ class DynamicPillarFeatureNet(PillarFeatureNet):
             norm_cfg=norm_cfg,
             mode=mode,
             legacy=legacy)
-        feat_channels = [self.in_channels] + list(feat_channels)
+        feat_channels = [self.in_channels] + list(feat_channels) # assume [4, 64, 64, 64] # type: ignore
         pfn_layers = []
         # TODO: currently only support one PFNLayer
 
-        for i in range(len(feat_channels) - 1):
-            in_filters = feat_channels[i]
-            out_filters = feat_channels[i + 1]
+        for i in range(len(feat_channels) - 1): # type: ignore
+            in_filters = feat_channels[i] # type: ignore
+            out_filters = feat_channels[i + 1] # type: ignore
             if i > 0:
-                in_filters *= 2
+                in_filters *= 2 # [4, 128, 128, ]
             norm_name, norm_layer = build_norm_layer(norm_cfg, out_filters)
             pfn_layers.append(
                 nn.Sequential(
@@ -290,9 +292,9 @@ class DynamicPillarFeatureNet(PillarFeatureNet):
         features_ls = [features]
         # Find distance of x, y, and z from cluster center
         if self._with_cluster_center:
-            voxel_mean, mean_coors = self.cluster_scatter(features, coors)
+            voxel_mean, mean_coors = self.cluster_scatter(features, coors) # [M, C] [N, 3] order zyx return [N', C] [N', 3]
             points_mean = self.map_voxel_center_to_point(
-                coors, voxel_mean, mean_coors)
+                coors, voxel_mean, mean_coors) # [N, 3] [M', C] [M' 3]
             # TODO: maybe also do cluster for reflectivity
             f_cluster = features[:, :3] - points_mean[:, :3]
             features_ls.append(f_cluster)

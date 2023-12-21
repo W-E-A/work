@@ -7,6 +7,8 @@ from tools.dataset_converters import kitti_converter as kitti
 from tools.dataset_converters import lyft_converter as lyft_converter
 from tools.dataset_converters import nuscenes_converter as nuscenes_converter
 from tools.dataset_converters import semantickitti_converter
+from tools.dataset_converters import deepaccident_converter as dpac
+from tools.dataset_converters import dair_converter as dair
 from tools.dataset_converters.create_gt_database import (
     GTDatabaseCreater, create_groundtruth_database)
 from tools.dataset_converters.update_infos_to_v2 import update_pkl_infos
@@ -239,6 +241,34 @@ def semantickitti_data_prep(info_prefix, out_dir):
         info_prefix, out_dir)
 
 
+def deepaccident_data_prep(root_path, info_prefix, version, out_dir, sample_interval):
+    if version == 'mini':
+        raise NotImplementedError('Can not handle mini version.')
+    dpac.create_deepaccident_info_file(root_path,info_prefix,out_dir,sample_interval)
+    # info_train_path = osp.join(out_dir, f'{info_prefix}_infos_train.pkl')
+    # info_val_path = osp.join(out_dir, f'{info_prefix}_infos_val.pkl')
+    # info_test_path = osp.join(out_dir, f'{info_prefix}_infos_test.pkl')
+
+
+def dair_v2x_data_prep(root_path, info_prefix, version, out_dir):
+    if version == 'c':
+        info_prefix += f'-{version}'
+        dair.create_dair_v2x_c_info_file(root_path,info_prefix,out_dir)
+        # info_train_path = osp.join(out_dir, f'{info_prefix}_infos_train.pkl')
+        # info_val_path = osp.join(out_dir, f'{info_prefix}_infos_val.pkl')
+        # info_test_path = osp.join(out_dir, f'{info_prefix}_infos_test.pkl')
+    elif version == 'spd':
+        info_prefix += f'-{version}'
+        #TODO
+        raise NotImplementedError('Can not handle spd version.')
+    elif version == 'tfd':
+        info_prefix += f'-{version}'
+        #TODO
+        raise NotImplementedError('Can not handle tfd version.')
+    else:
+        raise ValueError(f'Invalid version: {version}')
+
+
 parser = argparse.ArgumentParser(description='Data converter arg parser')
 parser.add_argument('dataset', metavar='kitti', help='name of the dataset')
 parser.add_argument(
@@ -268,18 +298,33 @@ parser.add_argument(
     default='./data/kitti',
     required=False,
     help='name of info pkl')
-parser.add_argument('--extra-tag', type=str, default='kitti')
+parser.add_argument(
+    '--extra-tag',
+    type=str,
+    default='',
+    required=False,
+    help='prefix for output file')
 parser.add_argument(
     '--workers', type=int, default=4, help='number of threads to be used')
 parser.add_argument(
     '--only-gt-database',
     action='store_true',
     help='Whether to only generate ground truth database.')
+parser.add_argument(
+    '--sample-interval',
+    type=int,
+    default=5,
+    required=False,
+    help='sample interval for deepaccident, default: 5 x 0.1s'
+)
 args = parser.parse_args()
 
 if __name__ == '__main__':
     from mmdet3d.utils import register_all_modules
     register_all_modules()
+
+    if args.extra_tag == '':
+        args.extra_tag = args.dataset
 
     if args.dataset == 'kitti':
         if args.only_gt_database:
@@ -376,5 +421,20 @@ if __name__ == '__main__':
     elif args.dataset == 'semantickitti':
         semantickitti_data_prep(
             info_prefix=args.extra_tag, out_dir=args.out_dir)
+    elif args.dataset == 'deepaccident':
+        deepaccident_data_prep(
+            root_path=args.root_path,
+            info_prefix=args.extra_tag,
+            version=args.version,
+            out_dir=args.out_dir,
+            sample_interval=args.sample_interval
+        )
+    elif args.dataset == 'dair-v2x':
+        dair_v2x_data_prep(
+            root_path=args.root_path,
+            info_prefix=args.extra_tag,
+            version=args.version,
+            out_dir=args.out_dir
+        )
     else:
         raise NotImplementedError(f'Don\'t support {args.dataset} dataset.')

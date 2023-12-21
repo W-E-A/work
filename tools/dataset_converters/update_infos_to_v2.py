@@ -1148,6 +1148,10 @@ def update_pkl_infos(dataset, out_dir, pkl_path):
         update_nuscenes_infos(pkl_path=pkl_path, out_dir=out_dir)
     elif dataset.lower() == 's3dis':
         update_s3dis_infos(pkl_path=pkl_path, out_dir=out_dir)
+    # elif dataset.lower() == 'deepaccident':
+    #     update_deepaccident_infos(pkl_path=pkl_path, out_dir=out_dir)
+    # elif dataset.lower() == 'dair-v2x-c':
+    #     update_dair_v2x_c_infos(pkl_path=pkl_path, out_dir=out_dir)
     else:
         raise NotImplementedError(f'Do not support convert {dataset} to v2.')
 

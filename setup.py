@@ -10,7 +10,8 @@ from setuptools import find_packages, setup
 import torch
 from torch.utils.cpp_extension import (BuildExtension, CppExtension,
                                        CUDAExtension)
-
+from Cython.Build import cythonize
+import numpy
 
 def readme():
     with open('README.md', encoding='utf-8') as f:
@@ -188,6 +189,13 @@ def add_mim_extention():
             else:
                 raise ValueError(f'Invalid mode {mode}')
 
+def add_ext_modules():
+
+    EXT_MODULE_PATH = [
+        "mmdet3d/structures/ops/box_overlaps.pyx"
+    ]
+
+    return cythonize(EXT_MODULE_PATH)
 
 if __name__ == '__main__':
     add_mim_extention()
@@ -218,6 +226,9 @@ if __name__ == '__main__':
         extras_require={
             'all': parse_requirements('requirements.txt'),
         },
-        ext_modules=[],
+        ext_modules=add_ext_modules(),
+        include_dirs=[
+            numpy.get_include()
+        ],
         cmdclass={'build_ext': BuildExtension},
         zip_safe=False)

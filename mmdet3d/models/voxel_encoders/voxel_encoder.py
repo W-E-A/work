@@ -40,7 +40,7 @@ class HardSimpleVFE(nn.Module):
             torch.Tensor: Mean of points inside each voxel in shape (N, 3(4))
         """
         points_mean = features[:, :, :self.num_features].sum(
-            dim=1, keepdim=False) / num_points.type_as(features).view(-1, 1)
+            dim=1, keepdim=False) / num_points.type_as(features).view(-1, 1) # [N, M, C] -> [N, C] / [N, 1] -> [N, C]
         return points_mean.contiguous()
 
 
@@ -349,13 +349,13 @@ class HardVFE(nn.Module):
         self.z_offset = self.vz / 2 + point_cloud_range[2]
         self.point_cloud_range = point_cloud_range
 
-        feat_channels = [self.in_channels] + list(feat_channels)
+        feat_channels = [self.in_channels] + list(feat_channels) # assume [4, 64, 64, 64]
         vfe_layers = []
         for i in range(len(feat_channels) - 1):
             in_filters = feat_channels[i]
             out_filters = feat_channels[i + 1]
             if i > 0:
-                in_filters *= 2
+                in_filters *= 2 # [128, 128, ]
             # TODO: pass norm_cfg to VFE
             # norm_name, norm_layer = build_norm_layer(norm_cfg, out_filters)
             if i == (len(feat_channels) - 2):
@@ -433,20 +433,20 @@ class HardVFE(nn.Module):
             features_ls.append(points_dist)
 
         # Combine together feature decorations
-        voxel_feats = torch.cat(features_ls, dim=-1)
+        voxel_feats = torch.cat(features_ls, dim=-1) # [N, M, ?]
         # The feature decorations were calculated without regard to whether
         # pillar was empty.
         # Need to ensure that empty voxels remain set to zeros.
-        voxel_count = voxel_feats.shape[1]
+        voxel_count = voxel_feats.shape[1] # M
         mask = get_paddings_indicator(num_points, voxel_count, axis=0)
         voxel_feats *= mask.unsqueeze(-1).type_as(voxel_feats)
 
         for i, vfe in enumerate(self.vfe_layers):
-            voxel_feats = vfe(voxel_feats)
+            voxel_feats = vfe(voxel_feats) # assume [N, M, 4] -> [N, M, 128] -> [N, M, 128] -> [N, 1, 64]
 
-        if (self.fusion_layer is not None and img_feats is not None):
+        if (self.fusion_layer is not None and img_feats is not None): # assume fusion out [N, M, 64]
             voxel_feats = self.fusion_with_mask(features, mask, voxel_feats,
-                                                coors, img_feats, img_metas)
+                                                coors, img_feats, img_metas) # assume [N, M, 4] [N, M, 1] [N, M, 64] [N, 4] [] []
 
         return voxel_feats
 
@@ -469,13 +469,13 @@ class HardVFE(nn.Module):
             torch.Tensor: Fused features of each voxel.
         """
         # the features is consist of a batch of points
-        batch_size = coors[-1, 0] + 1
+        batch_size = coors[-1, 0] + 1 # [N, 4]
         points = []
         for i in range(batch_size):
             single_mask = (coors[:, 0] == i)
-            points.append(features[single_mask][mask[single_mask]])
+            points.append(features[single_mask][mask[single_mask]]) # [M, 4] -> mask [invalid, 4]
 
-        point_feats = voxel_feats[mask]
+        point_feats = voxel_feats[mask] # [N, valid, 64] ???
         point_feats = self.fusion_layer(img_feats, points, point_feats,
                                         img_metas)
 
