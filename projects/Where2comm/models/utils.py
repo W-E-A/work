@@ -6,8 +6,12 @@ from mmengine.model.base_module import BaseModule
 from mmdet3d.models.middle_encoders.pillar_scatter import PointPillarsScatter
 import torch.nn.functional as F
 import math
+import os
+import os.path as osp
 
 from shapely.geometry import Polygon
+from projects.Where2comm.visualization import visualize
+import matplotlib.pyplot as plt
 
 @MODELS.register_module()
 class PointPillarsScatterWrapper(BaseModule):
@@ -150,24 +154,24 @@ def decode_reg_result(reg_result, anchor_box):
 
     batch_size = reg_result.shape[0]
 
-    reg_result = reg_result.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, 7) # [B, H*W*2, 7]
-    boxes = torch.zeros_like(reg_result) # [B, H*W*2, 7]
+    regs = reg_result.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, 7) # [B, H*W*2, 7]
+    boxes = torch.zeros_like(regs) # [B, H*W*2, 7]
     
-    anchor_box = anchor_box.reshape(-1, 7).repeat(batch_size, 1, 1).to(reg_result.dtype) # [B, H*W*2, 7]
-    anchor_d = torch.sqrt(anchor_box[..., 4] ** 2 + anchor_box[..., 5] ** 2) # [h*w*2, 1]
+    anchors = anchor_box.reshape(-1, 7).repeat(batch_size, 1, 1).to(regs.dtype) # [B, H*W*2, 7]
+    anchor_d = torch.sqrt(anchors[..., 4] ** 2 + anchors[..., 5] ** 2) # [h*w*2, 1]
     anchor_d = anchor_d.repeat(batch_size, 2, 1).transpose(1, 2) # [B, H*W*2, 2]
 
     # import pdb
     # pdb.set_trace()
 
     # Inv-normalize to get xyz
-    boxes[..., [0, 1]] = torch.mul(reg_result[..., [0, 1]], anchor_d) + anchor_box[..., [0, 1]]
-    boxes[..., [2]] = torch.mul(reg_result[..., [2]], anchor_box[..., [3]]) + anchor_box[..., [2]]
+    boxes[..., [0, 1]] = torch.mul(regs[..., [0, 1]], anchor_d) + anchors[..., [0, 1]]
+    boxes[..., [2]] = torch.mul(regs[..., [2]], anchors[..., [3]]) + anchors[..., [2]]
 
     # hwl
-    boxes[..., [3, 4, 5]] = torch.exp(reg_result[..., [3, 4, 5]]) * anchor_box[..., [3, 4, 5]]
+    boxes[..., [3, 4, 5]] = torch.exp(regs[..., [3, 4, 5]]) * anchors[..., [3, 4, 5]]
     # yaw angle
-    boxes[..., 6] = reg_result[..., 6] + anchor_box[..., 6]
+    boxes[..., 6] = regs[..., 6] + anchors[..., 6]
 
     return boxes
 
@@ -408,3 +412,299 @@ def get_mask_for_boxes_within_range(boxes, gt_range):
                   dim=-1), dim=-1)
 
     return mask
+
+def postprocess(psm, rm, score_threshold: float, id: int, test_cfg: dict, batch_dict: dict):
+    order = test_cfg['order'] # type: ignore
+    nms_threshold = test_cfg['nms_threshold'] # type: ignore
+    lidar_range = test_cfg['lidar_range'] # type: ignore
+
+    anchor_box = batch_dict['anchor_box'][0].clone() # [H, W, 2, 7] xyzhwly
+    cls_pred = torch.sigmoid(psm.permute(0, 2, 3, 1).contiguous()) # [1, 2, H, W] -> [1, H, W, 2]
+    cls_pred = cls_pred.reshape(1, -1) # [1, H*W*2]
+    box_pred = decode_reg_result(rm, anchor_box) # [1, 14, H, W] [H, W, 2, 7] xyzhwly -> []
+    mask = torch.gt(cls_pred, score_threshold) # [1, H*W*2]
+    mask_reg = mask.unsqueeze(2).repeat(1, 1, 7)  # [1, H*W*2, 7]
+    masked_cls_pred = torch.masked_select(cls_pred[0], mask[0]) # [N, ]
+    masked_box_pred = torch.masked_select(box_pred[0], mask_reg[0]).reshape(-1, 7) # [N, 7]
+
+    if len(masked_box_pred) != 0:
+
+        corner_pred_3d = boxes_to_corners_baseline(masked_box_pred, order) # [N, 8, 3]
+
+        # box_pred_2d = corner_to_standup_box(corner_pred_3d) # [N, 4]
+
+        # box_pred_2d_score = torch.cat([box_pred_2d, masked_cls_pred], dim=1) # [N, 5]
+
+        keep_index_1 = remove_large_pred_bbx(corner_pred_3d)
+        keep_index_2 = remove_bbx_abnormal_z(corner_pred_3d)
+        keep_index = torch.logical_and(keep_index_1, keep_index_2)
+
+        corner_pred_3d_filtered = corner_pred_3d[keep_index] # [n, 8, 3]
+        masked_cls_pred_filtered = masked_cls_pred[keep_index] # [n, ]
+
+        keep_index = nms_rotated(corner_pred_3d_filtered, masked_cls_pred_filtered, nms_threshold)
+        
+        corner_pred_3d_final = corner_pred_3d_filtered[keep_index] # [f, 8, 3]
+        masked_cls_pred_final = masked_cls_pred_filtered[keep_index] # [f, ]
+
+        # filter out the prediction out of the range.
+        mask = get_mask_for_boxes_within_range(corner_pred_3d_final, lidar_range)
+        corner_pred_3d_final = corner_pred_3d_final[mask, :, :]  # [f', 8, 3]
+        masked_cls_pred_final = masked_cls_pred_final[mask] # [f', ]
+
+    else:
+        corner_pred_3d_final = torch.zeros((0, 8, 3))
+        masked_cls_pred_final = torch.zeros((0))
+
+    if id < 0:
+        gt_boxes = batch_dict['gt_boxes'][0] # [100, 7]
+        gt_mask = batch_dict['gt_mask'][0] # [100, ]
+        # gt_object_ids = batch_dict['gt_object_ids'][0] # [N, ]
+    else:
+        gt_boxes = batch_dict[f'{id}_gt_boxes'][0] # [100, 7]
+        gt_mask = batch_dict[f'{id}_gt_mask'][0] # [100, ]
+        # gt_object_ids = batch_dict[f'{id}_gt_object_ids'][0] # [N, ]
+    masked_gt_boxes = gt_boxes[gt_mask == 1] # [N, 7]
+    masked_gt_corner = boxes_to_corners_baseline(masked_gt_boxes, order)
+    mask = get_mask_for_boxes_within_range(masked_gt_corner, lidar_range)
+    masked_gt_corner_final = masked_gt_corner[mask, :, :]
+
+    return corner_pred_3d_final, masked_cls_pred_final, masked_gt_corner_final
+
+
+def temp_vis(idx: int,
+             id: int,
+             vis_dict: dict,
+             comm: bool = True,
+             save_path: str = './temp_vis',
+             save_start: int = 0,
+             save_end: int = 10,
+             save_wrap: bool = False):
+    if (idx >= save_start and idx < save_end) or save_start >= save_end:
+        path = f'{save_path}/vis_{idx}'
+        os.makedirs(path, exist_ok=True)
+
+        save_path_bev = osp.join(path, f'bev_{id}.png')
+        save_path_3d = osp.join(path, f'3d_{id}.png')
+        if comm and id >= 0:
+            save_path_cmap = osp.join(path, f'cmap_{id}.png')
+            save_path_mask = osp.join(path, f'mask_{id}.png')
+        save_path_psm = osp.join(path, f'psm_{id}.png')
+        save_path_feat = osp.join(path, f'feat_{id}.png')
+        save_path_wrap_feat = osp.join(path, f'wrap_feat_{id}.png')
+        if comm and id >= 0:
+            save_path_wrap_cmap = osp.join(path, f'wrap_cmap_{id}.png')
+            save_path_wrap_mask = osp.join(path, f'wrap_mask_{id}.png')
+
+        pc = vis_dict['pc']
+        pc_range = vis_dict['pc_range']
+        pred_corner = vis_dict['pred_corner']
+        gt_corner = vis_dict['gt_corner']
+        if comm and id >= 0:
+            cmap = vis_dict['cmap']
+            mask = vis_dict['mask']
+        psm = vis_dict['psm']
+        feat = vis_dict['feat']
+        if save_wrap:
+            rela_pose = vis_dict['rela_pose']
+            downsample_rate = vis_dict['downsample_rate']
+            voxel_size = vis_dict['voxel_size']
+            wrap_feat = warp_affine(
+                feat,
+                rela_pose,
+                downsample_rate,
+                voxel_size
+            )
+            if comm and id >= 0:
+                wrap_cmap = warp_affine(
+                    cmap, # type: ignore
+                    rela_pose,
+                    downsample_rate,
+                    voxel_size
+                )
+                wrap_mask = warp_affine(
+                    mask, # type: ignore
+                    rela_pose,
+                    downsample_rate,
+                    voxel_size
+                )
+        visualize(pred_corner, gt_corner, pc, pc_range, save_path_bev, 'bev', vis_gt_box=True, vis_pred_box=True, left_hand=False)
+        visualize(pred_corner, gt_corner, pc, pc_range, save_path_3d, '3d', vis_gt_box=True, vis_pred_box=True, left_hand=False)
+        if comm and id >= 0:
+            target = cmap[0].permute(1, 2, 0).contiguous().squeeze(-1).cpu().numpy() # type: ignore
+            target = np.flipud(target)
+            plt.imsave(save_path_cmap, target) # type: ignore
+
+            target = mask[0].permute(1, 2, 0).contiguous().squeeze(-1).cpu().numpy() # type: ignore
+            target = np.flipud(target)
+            plt.imsave(save_path_mask, target) # type: ignore
+
+        target = psm[0].permute(1, 2, 0).contiguous().squeeze(-1) # type: ignore
+        target = torch.sigmoid(torch.max(target, dim=-1).values).cpu().numpy()
+        target = np.flipud(target)
+        plt.imsave(save_path_psm, target) # type: ignore
+
+        target = feat[0].permute(1, 2, 0).contiguous().squeeze(-1) # type: ignore
+        target = torch.sigmoid(torch.mean(target,dim=-1)).cpu().numpy()
+        target = np.flipud(target)
+        plt.imsave(save_path_feat, target) # type: ignore
+
+        if save_wrap:
+            target = wrap_feat[0].permute(1, 2, 0).contiguous().squeeze(-1) # type: ignore
+            target = torch.sigmoid(torch.mean(target,dim=-1)).cpu().numpy()
+            target = np.flipud(target)
+            plt.imsave(save_path_wrap_feat, target) # type: ignore
+
+            if comm and id >= 0:
+                target = wrap_cmap[0].permute(1, 2, 0).contiguous().squeeze(-1).cpu().numpy() # type: ignore
+                target = np.flipud(target)
+                plt.imsave(save_path_wrap_cmap, target) # type: ignore
+
+                target = wrap_mask[0].permute(1, 2, 0).contiguous().squeeze(-1).cpu().numpy() # type: ignore
+                target = np.flipud(target)
+                plt.imsave(save_path_wrap_mask, target) # type: ignore
+
+        
+        return True
+    elif idx >= save_end:
+        return False
+    else:
+        return True
+
+def voc_ap(rec, prec):
+    """
+    VOC 2010 Average Precision.
+    """
+    rec.insert(0, 0.0)
+    rec.append(1.0)
+    mrec = rec[:]
+
+    prec.insert(0, 0.0)
+    prec.append(0.0)
+    mpre = prec[:]
+
+    for i in range(len(mpre) - 2, -1, -1):
+        mpre[i] = max(mpre[i], mpre[i + 1])
+
+    i_list = []
+    for i in range(1, len(mrec)):
+        if mrec[i] != mrec[i - 1]:
+            i_list.append(i)
+
+    ap = 0.0
+    for i in i_list:
+        ap += ((mrec[i] - mrec[i - 1]) * mpre[i])
+    return ap, mrec, mpre
+
+def caluclate_tp_fp(det_boxes, det_score, gt_boxes, result_stat, iou_thresh):
+    """
+    Calculate the true positive and false positive numbers of the current
+    frames.
+
+    Parameters
+    ----------
+    det_boxes : torch.Tensor
+        The detection bounding box, shape (N, 8, 3) or (N, 4, 2).
+    det_score :torch.Tensor
+        The confidence score for each preditect bounding box.
+    gt_boxes : torch.Tensor
+        The groundtruth bounding box.
+    result_stat: dict
+        A dictionary contains fp, tp and gt number.
+    iou_thresh : float
+        The iou thresh.
+    """
+    # fp, tp and gt in the current frame
+    fp = []
+    tp = []
+    gt = gt_boxes.shape[0]
+    if det_boxes is not None:
+        # convert bounding boxes to numpy array
+        det_boxes = det_boxes.cpu().numpy()
+        det_score = det_score.cpu().numpy()
+        gt_boxes = gt_boxes.cpu().numpy()
+
+        # sort the prediction bounding box by score
+        score_order_descend = np.argsort(-det_score)
+        det_polygon_list = list(convert_format(det_boxes))
+        gt_polygon_list = list(convert_format(gt_boxes))
+
+        # match prediction and gt bounding box
+        for i in range(score_order_descend.shape[0]):
+            det_polygon = det_polygon_list[score_order_descend[i]]
+            ious = compute_iou(det_polygon, gt_polygon_list)
+
+            if len(gt_polygon_list) == 0 or np.max(ious) < iou_thresh:
+                fp.append(1)
+                tp.append(0)
+                continue
+
+            fp.append(0)
+            tp.append(1)
+
+            gt_index = np.argmax(ious)
+            gt_polygon_list.pop(gt_index)
+
+    result_stat[iou_thresh]['fp'] += fp
+    result_stat[iou_thresh]['tp'] += tp
+    result_stat[iou_thresh]['gt'] += gt
+
+
+def calculate_ap(result_stat, iou):
+    """
+    Calculate the average precision and recall, and save them into a txt.
+
+    Parameters
+    ----------
+    result_stat : dict
+        A dictionary contains fp, tp and gt number.
+    iou : float
+    """
+    iou_5 = result_stat[iou]
+
+    fp = iou_5['fp']
+    tp = iou_5['tp']
+    assert len(fp) == len(tp)
+
+    gt_total = iou_5['gt']
+
+    cumsum = 0
+    for idx, val in enumerate(fp):
+        fp[idx] += cumsum
+        cumsum += val
+
+    cumsum = 0
+    for idx, val in enumerate(tp):
+        tp[idx] += cumsum
+        cumsum += val
+
+    rec = tp[:]
+    for idx, val in enumerate(tp):
+        rec[idx] = float(tp[idx]) / gt_total
+
+    prec = tp[:]
+    for idx, val in enumerate(tp):
+        prec[idx] = float(tp[idx]) / (fp[idx] + tp[idx])
+
+    ap, mrec, mprec = voc_ap(rec[:], prec[:])
+
+    return ap, mrec, mprec
+
+
+def eval_final_results(result_stat):
+    dump_dict = {}
+
+    ap_30, mrec_30, mpre_30 = calculate_ap(result_stat, 0.30)
+    ap_50, mrec_50, mpre_50 = calculate_ap(result_stat, 0.50)
+    ap_70, mrec_70, mpre_70 = calculate_ap(result_stat, 0.70)
+
+    dump_dict.update({'ap_30': ap_30,
+                      'ap_50': ap_50,
+                      'ap_70': ap_70,
+                      'mpre_50': mpre_50,
+                      'mrec_50': mrec_50,
+                      'mpre_70': mpre_70,
+                      'mrec_70': mrec_70,
+                      })
+
+    return ap_30, ap_50, ap_70

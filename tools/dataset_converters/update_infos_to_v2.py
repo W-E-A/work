@@ -20,7 +20,8 @@ from nuscenes.nuscenes import NuScenes
 
 from mmdet3d.datasets.convert_utils import (convert_annos,
                                             get_kitti_style_2d_boxes,
-                                            get_nuscenes_2d_boxes)
+                                            get_nuscenes_2d_boxes,
+                                            get_deepaccident_2d_boxes)
 from mmdet3d.datasets.utils import convert_quaternion_to_matrix
 from mmdet3d.structures import points_cam2img
 
@@ -385,6 +386,107 @@ def update_nuscenes_infos(pkl_path, out_dir):
     metainfo['info_version'] = '1.1'
     converted_data_info = dict(metainfo=metainfo, data_list=converted_list)
 
+    mmengine.dump(converted_data_info, out_path, 'pkl')
+
+# @profile
+def update_deepaccident_infos(pkl_path, out_dir, keep, convert_camera_instance):
+    camera_types = [
+        'Camera_Back',
+        'Camera_BackLeft',
+        'Camera_BackRight',
+        'Camera_Front',
+        'Camera_FrontLeft',
+        'Camera_FrontRight',
+    ]
+    print(f'{pkl_path} will be modified.')
+
+    if out_dir in pkl_path and keep == False:
+        print(f'Warning, you may overwriting '
+              f'the original data {pkl_path}.')
+    if convert_camera_instance:
+        print('Warning, convert camera instance will take a long time.')
+    print(f'Reading from input file: {pkl_path}.')
+    data_dict = mmengine.load(pkl_path)
+    METAINFO = data_dict['metainfo']
+    data_list = data_dict['data_list']
+    print('Start updating:')
+    converted_list = []
+    for i, ori_info_dict in enumerate(mmengine.track_iter_progress(data_list)):
+        temp_data_info = get_empty_standard_data_info(camera_types=camera_types)
+        temp_data_info['sample_idx'] = i # type: ignore
+        temp_data_info['ego2global'] = ori_info_dict['ego_to_world_matrix'].astype(np.float32).tolist()
+        temp_data_info['lidar_points']['num_pts_feats'] = ori_info_dict['num_features'] # type: ignore
+        temp_data_info['lidar_points']['lidar_path'] = ori_info_dict['lidar_path'] # type: ignore
+        temp_data_info['lidar_points']['lidar2ego'] = ori_info_dict['lidar_to_ego_matrix'].astype(np.float32).tolist() # type: ignore
+        # bc-breaking: Timestamp has divided 1e6 in pkl infos.
+        temp_data_info['timestamp'] = ori_info_dict['timestamp'] # 1 interval means 0.1s
+        temp_data_info['images'] = {}
+        for cam in ori_info_dict['cams']:
+            empty_img_info = get_empty_img_info()
+            empty_img_info['img_path'] = ori_info_dict['cams'][cam]['data_path'] # type: ignore
+            empty_img_info['cam2img'] = ori_info_dict['cams'][cam]['cam_intrinsic'].astype(np.float32).tolist() # array to list here
+            # bc-breaking: Timestamp has divided 1e6 in pkl infos.
+            empty_img_info['timestamp'] = ori_info_dict['cams'][cam]['timestamp'] # 1 interval means 0.1s
+            empty_img_info['cam2ego'] = ori_info_dict['cams'][cam]['camera_to_ego_matrix'].astype(np.float32).tolist()
+            empty_img_info['lidar2cam'] = ori_info_dict['cams'][cam]['lidar_to_camera_matrix'].astype(np.float32).tolist() # array to list here
+            temp_data_info['images'][cam] = empty_img_info # type: ignore
+        ignore_class_name = set()
+        if 'gt_boxes' in ori_info_dict:
+            num_instances = ori_info_dict['gt_boxes'].shape[0]
+            for i in range(num_instances):
+                empty_instance = get_empty_instance()
+                empty_instance['bbox_3d'] = ori_info_dict['gt_boxes'][i, :].astype(np.float32).tolist() # array to list here 7
+                if ori_info_dict['gt_names'][i] in METAINFO['classes']:
+                    empty_instance['bbox_label'] = METAINFO['classes'].index(ori_info_dict['gt_names'][i])
+                else:
+                    ignore_class_name.add(ori_info_dict['gt_names'][i])
+                    empty_instance['bbox_label'] = -1 # type: ignore
+                empty_instance['bbox_label_3d'] = copy.deepcopy(empty_instance['bbox_label']) # type: ignore
+                empty_instance['velocity'] = ori_info_dict['gt_velocity'][i, :].astype(np.float32).tolist() # array to list here 2
+                empty_instance['num_lidar_pts'] = ori_info_dict['num_lidar_pts'][i]
+                empty_instance['bbox_3d_isvalid'] = ori_info_dict['valid_flag'][i] # bool
+                empty_instance = clear_instance_unused_keys(empty_instance)
+                temp_data_info['instances'].append(empty_instance) # type: ignore
+            if convert_camera_instance:
+                empty_multicamera_instance = get_empty_multicamera_instances(camera_types)
+                for cam in camera_types:
+                    cam_info = ori_info_dict['cams'][cam] # type: ignore
+                    # list[dict]
+                    ann_infos = get_deepaccident_2d_boxes(
+                        ori_info_dict,
+                        METAINFO,
+                        cam_info,
+                        visibilities=['', '0', '1'])
+                    empty_multicamera_instance[cam] = ann_infos
+                temp_data_info['cam_instances'] = empty_multicamera_instance
+        temp_data_info, _ = clear_data_info_unused_keys(temp_data_info)
+
+        # custom keys
+        # temp_data_info['scenario_meta'] = ori_info_dict['scenario_meta']
+        temp_data_info['scene_name'] = ori_info_dict['scene_name']
+        temp_data_info['vehicle_name'] = ori_info_dict['vehicle_name']
+        temp_data_info['bev_path'] = ori_info_dict['bev_path']
+        temp_data_info['scenario_length'] = ori_info_dict['scenario_length']
+        temp_data_info['sample_interval'] = ori_info_dict['sample_interval']
+        temp_data_info['vehicle_speed_x'] = ori_info_dict['vehicle_speed_x']
+        temp_data_info['vehicle_speed_y'] = ori_info_dict['vehicle_speed_y']
+        converted_list.append(temp_data_info)
+
+    pkl_name = Path(pkl_path).name
+    if keep:
+        out_path = osp.join(out_dir, f'v2_{pkl_name}')
+    else:
+        out_path = osp.join(out_dir, pkl_name)
+    print(f'Writing to output file: {out_path}.')
+    print(f'ignore classes: {ignore_class_name}') # type: ignore
+
+    metainfo = dict()
+    metainfo['categories'] = {k: i for i, k in enumerate(METAINFO['classes'])}
+    if ignore_class_name: # type: ignore
+        for ignore_class in ignore_class_name:
+            metainfo['categories'][ignore_class] = -1
+    metainfo['dataset'] = 'deepaccident'
+    converted_data_info = dict(metainfo=metainfo, data_list=converted_list)
     mmengine.dump(converted_data_info, out_path, 'pkl')
 
 
@@ -1129,11 +1231,21 @@ def parse_args():
         default='converted_annotations',
         required=False,
         help='output direction of info pkl')
+    parser.add_argument(
+        '--keep',
+        action='store_true',
+        help="whether to keep old format file"
+    )
+    parser.add_argument(
+        '--convert_camera_instance',
+        action='store_true',
+        help="whether to convert camera instance"
+    )
     args = parser.parse_args()
     return args
 
 
-def update_pkl_infos(dataset, out_dir, pkl_path):
+def update_pkl_infos(dataset, out_dir, pkl_path, keep=False, convert_camera_instance=False):
     if dataset.lower() == 'kitti':
         update_kitti_infos(pkl_path=pkl_path, out_dir=out_dir)
     elif dataset.lower() == 'waymo':
@@ -1148,8 +1260,8 @@ def update_pkl_infos(dataset, out_dir, pkl_path):
         update_nuscenes_infos(pkl_path=pkl_path, out_dir=out_dir)
     elif dataset.lower() == 's3dis':
         update_s3dis_infos(pkl_path=pkl_path, out_dir=out_dir)
-    # elif dataset.lower() == 'deepaccident':
-    #     update_deepaccident_infos(pkl_path=pkl_path, out_dir=out_dir)
+    elif dataset.lower() == 'deepaccident':
+        update_deepaccident_infos(pkl_path=pkl_path, out_dir=out_dir, keep=keep, convert_camera_instance=convert_camera_instance)
     # elif dataset.lower() == 'dair-v2x-c':
     #     update_dair_v2x_c_infos(pkl_path=pkl_path, out_dir=out_dir)
     else:
@@ -1161,4 +1273,4 @@ if __name__ == '__main__':
     if args.out_dir is None:
         args.out_dir = args.root_dir
     update_pkl_infos(
-        dataset=args.dataset, out_dir=args.out_dir, pkl_path=args.pkl_path)
+        dataset=args.dataset, out_dir=args.out_dir, pkl_path=args.pkl_path, keep=args.keep, convert_camera_instance=args.convert_camera_instance)

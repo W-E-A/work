@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from mmdet3d.registry import MODELS
 from mmengine.model.base_module import BaseModule
 import torch
@@ -51,12 +51,28 @@ class BEVBackbone(BaseModule):
         
         self.deblocks = nn.ModuleList(self.deblocks)
         
-    def forward(self, x):
-        # [B, 64, H, W]
-        x = self.resnet(x)
+    def forward(self, x, encode: bool = True, decode :bool = True, decode_level: Optional[Union[int, tuple]] = None):
+
+        if encode:
+            x = self.resnet(x)
+
+        if not decode:
+            # [B, 64, H, W]
+            return x
+        
+        if decode_level == None:
+            decode_level = tuple(range(self.num_levels))
+        
+        if not encode:
+            if isinstance(decode_level, int):
+                assert decode_level < self.num_levels
+                return self.deblocks[decode_level](x)
+            elif isinstance(decode_level, tuple):
+                assert isinstance(x, list) and len(x) == len(decode_level)
+                assert all(level in list(range(self.num_levels)) for level in decode_level)
         
         ups = []
-        for idx in range(self.num_levels):
+        for idx in decode_level: # type: ignore
             if len(self.deblocks) > 0:
                 ups.append(self.deblocks[idx](x[idx]))
             else:
@@ -67,5 +83,5 @@ class BEVBackbone(BaseModule):
         
         if len(self.deblocks) > self.num_levels:
             x = self.deblocks[-1](x)
-        
-        return x # original xs or cat x
+
+        return x

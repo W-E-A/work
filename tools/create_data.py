@@ -241,13 +241,18 @@ def semantickitti_data_prep(info_prefix, out_dir):
         info_prefix, out_dir)
 
 
-def deepaccident_data_prep(root_path, info_prefix, version, out_dir, sample_interval):
+def deepaccident_data_prep(root_path, info_prefix, version, out_dir, sample_interval, keep_old_format=True, convert_camera_instance=False):
     if version == 'mini':
         raise NotImplementedError('Can not handle mini version.')
-    dpac.create_deepaccident_info_file(root_path,info_prefix,out_dir,sample_interval)
-    # info_train_path = osp.join(out_dir, f'{info_prefix}_infos_train.pkl')
-    # info_val_path = osp.join(out_dir, f'{info_prefix}_infos_val.pkl')
+    # dpac.create_deepaccident_info_file(root_path,info_prefix,out_dir,sample_interval)
+    info_train_path = osp.join(out_dir, f'{info_prefix}_infos_train.pkl')
+    info_val_path = osp.join(out_dir, f'{info_prefix}_infos_val.pkl')
     # info_test_path = osp.join(out_dir, f'{info_prefix}_infos_test.pkl')
+    update_pkl_infos('deepaccident', out_dir=out_dir, pkl_path=info_train_path, keep=keep_old_format, convert_camera_instance=convert_camera_instance)
+    update_pkl_infos('deepaccident', out_dir=out_dir, pkl_path=info_val_path, keep=keep_old_format, convert_camera_instance=convert_camera_instance)
+    # TODO
+    # create_groundtruth_database(dataset_name, root_path, info_prefix,
+    #                             f'{info_prefix}_infos_train.pkl')
 
 
 def dair_v2x_data_prep(root_path, info_prefix, version, out_dir):
@@ -317,6 +322,14 @@ parser.add_argument(
     required=False,
     help='sample interval for deepaccident, default: 5 x 0.1s'
 )
+parser.add_argument(
+    '--keep',
+    action='store_true',
+    help='whether to keep old format file')
+parser.add_argument(
+    '--convert_camera_instance',
+    action='store_true',
+    help='whether to convert scamera instance')
 args = parser.parse_args()
 
 if __name__ == '__main__':
@@ -427,7 +440,9 @@ if __name__ == '__main__':
             info_prefix=args.extra_tag,
             version=args.version,
             out_dir=args.out_dir,
-            sample_interval=args.sample_interval
+            sample_interval=args.sample_interval,
+            keep_old_format=args.keep,
+            convert_camera_instance=args.convert_camera_instance
         )
     elif args.dataset == 'dair-v2x':
         dair_v2x_data_prep(

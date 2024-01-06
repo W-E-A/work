@@ -10,8 +10,10 @@ from pyquaternion import Quaternion
 from shapely.geometry import MultiPoint, box
 from shapely.geometry.polygon import Polygon
 
-from mmdet3d.structures import Box3DMode, CameraInstance3DBoxes, points_cam2img
+from mmdet3d.structures import Box3DMode, CameraInstance3DBoxes, points_cam2img, LiDARInstance3DBoxes
 from mmdet3d.structures.ops import box_np_ops
+
+import torch
 
 kitti_categories = ('Pedestrian', 'Cyclist', 'Car', 'Van', 'Truck',
                     'Person_sitting', 'Tram', 'Misc')
@@ -53,6 +55,76 @@ LyftNameMapping = {
     'truck': 'truck',
     'animal': 'animal'
 }
+
+def get_deepaccident_2d_boxes(ori_info_dict, metainfo, cam_info, visibilities: List[str]) -> List[dict]:
+
+    lidar_to_camera_matrix = cam_info['lidar_to_camera_matrix']
+    ego_to_world_matrix = cam_info['ego_to_world_matrix']
+    camera_to_ego_matrix = cam_info['camera_to_ego_matrix']
+    
+    gt_boxes = LiDARInstance3DBoxes(
+        ori_info_dict['gt_boxes'],
+        box_dim=7,
+        with_yaw=True,
+        origin=(0.5, 0.5, 0.5)
+    )
+    gt_boxes.convert_to(Box3DMode.CAM, lidar_to_camera_matrix, True)
+    gt_corners = gt_boxes.corners.cpu().numpy().transpose(0, 2, 1) # [N, 3, 8]
+    gt_boxes = gt_boxes.tensor.cpu().numpy() # [N, 7]
+    gt_names = ori_info_dict['gt_names']
+    gt_velocity = ori_info_dict['gt_velocity']
+    camera_visibility = ori_info_dict['camera_visibility']
+
+    repro_recs = []
+
+    for idx, gt_corner in enumerate(gt_corners):
+
+        if camera_visibility[idx] not in visibilities:
+            continue
+        
+        in_front = np.argwhere(gt_corner[2, :] > 0).flatten() # [3, 8]
+        gt_corner = gt_corner[:, in_front]
+
+        # Project 3d box to 2d.
+        corner_coords = view_points(gt_corner, cam_info['cam_intrinsic'],
+                                    True).T[:, :2].tolist() # [[u, v],[u, v],[u, v],...]
+
+        # Keep only corners that fall within the image.
+        final_coords = post_process_coords(corner_coords)
+
+        # Skip if the convex hull of the re-projected corners
+        # does not intersect the image canvas.
+        if final_coords is None:
+            continue
+        else:
+            min_x, min_y, max_x, max_y = final_coords # type: ignore
+
+        repro_rec = dict()
+        repro_rec['bbox_label'] = metainfo['classes'].index(gt_names[idx])
+        repro_rec['bbox_label_3d'] = copy.deepcopy(repro_rec['bbox_label'])
+        repro_rec['bbox'] = [min_x, min_y, max_x, max_y]
+        repro_rec['bbox_3d'] = gt_boxes[idx].tolist()
+        repro_rec['bbox_3d_isvalid'] = True
+    
+        global_velo2d = gt_velocity[idx]
+        global_velo3d = np.array([*global_velo2d, 0.0])
+        cam_velo3d = global_velo3d @ np.linalg.inv(ego_to_world_matrix).T @ np.linalg.inv(camera_to_ego_matrix).T
+        velo = cam_velo3d[0::2].tolist()
+
+        repro_rec['velocity'] = velo
+
+        center_3d = gt_boxes[idx][:3].reshape([1, 3])
+        center_2d_with_depth = points_cam2img(center_3d, cam_info['cam_intrinsic'], with_depth=True)
+        center_2d_with_depth = center_2d_with_depth.squeeze().tolist()
+        repro_rec['center_2d'] = center_2d_with_depth[:2]
+        repro_rec['depth'] = center_2d_with_depth[2]
+        # normalized center2D + depth
+        # if samples with depth < 0 will be removed
+        if repro_rec['depth'] <= 0:
+            continue
+        repro_recs.append(repro_rec)
+
+    return repro_recs
 
 
 def get_nuscenes_2d_boxes(nusc: NuScenes, sample_data_token: str,

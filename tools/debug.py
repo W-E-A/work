@@ -5,6 +5,7 @@ import json
 import tqdm
 import pdb
 
+from mmdet3d.utils import register_all_modules
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
 
@@ -40,6 +41,7 @@ def main():
     
 
 if __name__ == '__main__':
+    register_all_modules()
     # label_root = osp.join(DATA_ROOT, 'cooperative/label')
     # label_list = os.listdir(label_root)
     # print(len(label_list))

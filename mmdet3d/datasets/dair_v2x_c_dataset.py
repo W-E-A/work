@@ -111,7 +111,10 @@ class PreparePCD(BaseTransform):
                 if self.project_to_ego:
                     pc[:,:3] = prj_pc
                 if self.visualize:
-                    item['vis_pc'] = prj_pc
+                    if self.project_to_ego:
+                        item['vis_pc'] = prj_pc
+                    else:
+                        item['vis_pc'] = pc[:,:3]
             pc = mask_points_by_range(pc,self.lidar_range)
             item['pc'] = pc
         
@@ -313,7 +316,7 @@ class GenerateGT(BaseTransform):
             id_highest, (self.H, self.W, self.num_anchors))
         neg_equal_one[index_x, index_y, index_z] = 0
 
-        return anchor_box, pos_equal_one, neg_equal_one, targets
+        return anchor_box, pos_equal_one, neg_equal_one, targets 
 
     def create_align_boxes(self, boxes_or_corners):
 

@@ -22,6 +22,13 @@ contents = {
     'lidar01':'.npz',
 }
 
+def _check_dataset_folder(data_path, struct):
+    dirs = os.listdir(data_path)
+    total = len(struct)
+    for dir in dirs:
+        if dir in struct:
+            total -= 1
+    assert (total == 0),f"Dataset is not well formatted and requires the following structure: {struct}"
 
 def _read_list_file(root_path, prefix, ext = '.txt', split = ''):
     with open(osp.join(root_path, prefix+ext), 'r') as f:
@@ -32,7 +39,7 @@ def _read_list_file(root_path, prefix, ext = '.txt', split = ''):
     return items
 
 
-def _get_detail_info(target_items, data_path, sample_interval):
+def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool = True):
     result = []
     for scenario_type, scenario in mmengine.track_iter_progress(target_items):
         assert scenario_type in scenario_types
@@ -63,47 +70,56 @@ def _get_detail_info(target_items, data_path, sample_interval):
                 calib_dict = mmengine.load(calib_path)
 
                 cams = {}
-                cam_name = [ name for name in contents.keys() if name.startswith('Camera')]
+                cam_name = [name for name in contents.keys() if name.startswith('Camera')]
                 for name in cam_name:
                     cam_info = {}
-                    cam_info['image_path'] = osp.join(osp.abspath(data_path),scenario_type,agent,name,scenario,frame+contents[name])
+                    cam_info['type'] = name
+                    cam_info['data_path'] = osp.join(osp.abspath(data_path),scenario_type,agent,name,scenario,frame+contents[name])
                     cam_info['lidar_to_camera_matrix'] = calib_dict['lidar_to_'+name]
-                    cam_info['camera_intrinsic_matrix'] = calib_dict['intrinsic_'+name]
+                    camera_to_lidar_matrix = np.linalg.inv(calib_dict['lidar_to_'+name])
+                    cam_info['camera_to_lidar_matrix'] = camera_to_lidar_matrix
+                    cam_info['camera_to_ego_matrix'] = calib_dict['lidar_to_ego'] @ camera_to_lidar_matrix
+                    cam_info['ego_to_world_matrix'] = calib_dict['ego_to_world']
+                    cam_info['cam_intrinsic'] = calib_dict['intrinsic_'+name]
                     cam_info['timestamp'] = int(frame.split('_')[-1])
                     cams[name] = cam_info
-
                 labels = _read_list_file(osp.join(data_path,scenario_type,agent,'label',scenario),frame,contents['label'])
                 agent_speed_x = float(labels[0].split(' ')[0]) # type: ignore
                 agent_speed_y = float(labels[0].split(' ')[1]) # type: ignore
-                bbox_list = []
-                for label in labels[1:]:
-                    if len(label.split(' ')) <= 1: # type: ignore
-                        continue
-                    cls_label = str(label.split(' ')[0]) # type: ignore
-                    bbox = label.split(' ')[1:8] # type: ignore
-                    bbox = list(map(float, bbox))
-                    ##
-                    # xyz hwl yaw
-                    bbox[6] = -bbox[6]
-                    ##
-                    vel = label.split(' ')[8:10] # type: ignore
-                    vel = list(map(float, vel))
-                    # reverse the y axis
-                    vel = [vel[0], -vel[1]]
-                    agent_id = int(label.split(' ')[-3]) # type: ignore
-                    num_lidar_pts = int(label.split(' ')[-2]) # type: ignore
-                    if label.split(' ')[-1] == 'True': # type: ignore
-                        camera_visibility = 1
-                    else:
-                        camera_visibility = 0
-                    bbox_list.append((cls_label,bbox,vel,agent_id,num_lidar_pts,camera_visibility))
+                if load_anno:
+                    bbox_list = []
+                    valid_flag = []
+                    for label in labels[1:]:
+                        if len(label.split(' ')) <= 1: # type: ignore
+                            continue
+                        cls_label = str(label.split(' ')[0]) # type: ignore
+                        bbox = label.split(' ')[1:8] # type: ignore
+                        bbox = list(map(float, bbox))
+                        # ori box: xyz lwh mmstandyaw
 
-                label_array = np.array([bbox[0] for bbox in bbox_list]).reshape(-1)
-                bbox_array = np.array([bbox[1] for bbox in bbox_list]).reshape(-1, 7)
-                vel_array = np.array([bbox[2] for bbox in bbox_list]).reshape(-1, 2)
-                vehicle_id_array = np.array([bbox[3] for bbox in bbox_list]).reshape(-1)
-                num_lidar_pts_array = np.array([bbox[4] for bbox in bbox_list]).reshape(-1)
-                camera_visibility_array = np.array([bbox[5] for bbox in bbox_list]).reshape(-1)
+                        vel = label.split(' ')[8:10] # type: ignore
+                        vel = list(map(float, vel))
+                        # reverse the y axis, Temporarily closed
+                        # vel = [vel[0], -vel[1]]
+                        agent_id = int(label.split(' ')[-3]) # type: ignore
+                        num_lidar_pts = int(label.split(' ')[-2]) # type: ignore
+                        if label.split(' ')[-1] == 'True': # type: ignore
+                            camera_visibility = 1
+                        else:
+                            camera_visibility = 0
+                        bbox_list.append((cls_label,bbox,vel,agent_id,num_lidar_pts,camera_visibility))
+                        if num_lidar_pts <= 0:
+                            valid_flag.append(True)
+                        else:
+                            valid_flag.append(False)
+
+                    label_array = np.array([bbox[0] for bbox in bbox_list]).reshape(-1)
+                    bbox_array = np.array([bbox[1] for bbox in bbox_list]).reshape(-1, 7)
+                    vel_array = np.array([bbox[2] for bbox in bbox_list]).reshape(-1, 2)
+                    vehicle_id_array = np.array([bbox[3] for bbox in bbox_list]).reshape(-1)
+                    num_lidar_pts_array = np.array([bbox[4] for bbox in bbox_list]).reshape(-1)
+                    camera_visibility_array = np.array([bbox[5] for bbox in bbox_list]).reshape(-1)
+                    valid_flag = np.array(valid_flag).reshape(-1)
                 
                 scenario_agent_frame_info = {} # 序列中的一帧
                 scenario_agent_frame_info['scenario_meta'] = meta_info # 场景元数据
@@ -112,6 +128,7 @@ def _get_detail_info(target_items, data_path, sample_interval):
                 scenario_agent_frame_info['scene_name'] = '_'.join([scenario_type,scenario.split('_')[0],scenario.split('_')[-1]]) # 场景名称
                 scenario_agent_frame_info['lidar_prefix'] = '_'.join([scenario_type,agent,frame]) # 雷达帧标识符
                 scenario_agent_frame_info['lidar_path'] = osp.join(osp.abspath(data_path),scenario_type,agent,'lidar01',scenario,frame+contents['lidar01']) # 雷达路径
+                scenario_agent_frame_info['num_features'] = 4
                 scenario_agent_frame_info['bev_path'] = osp.join(osp.abspath(data_path),scenario_type,agent,'BEV_instance_camera',scenario,frame+contents['BEV_instance_camera']) # BEV实例路径
                 scenario_agent_frame_info['timestamp'] = int(frame.split('_')[-1]) # 帧时间戳，帧间隔为0.1s
                 scenario_agent_frame_info['scenario_length'] = last_seq_idx # 最大时间戳
@@ -119,28 +136,24 @@ def _get_detail_info(target_items, data_path, sample_interval):
                 scenario_agent_frame_info['cams'].update(cams) # 多个相机，每个相机包括图像路径，标定参数
                 scenario_agent_frame_info['lidar_to_ego_matrix'] = calib_dict['lidar_to_ego'] # 雷达外参
                 scenario_agent_frame_info['ego_to_world_matrix'] = calib_dict['ego_to_world'] # 对象的世界坐标
-                scenario_agent_frame_info['vehicle_speed_x'] = agent_speed_x # 对象的x速度
-                scenario_agent_frame_info['vehicle_speed_y'] = agent_speed_y # 对象的y速度
-                scenario_agent_frame_info['gt_names'] = label_array # 世界类别gt
-                scenario_agent_frame_info['gt_boxes'] = bbox_array # 世界boxes
-                scenario_agent_frame_info['gt_velocity'] = vel_array# 世界速度gt
-                scenario_agent_frame_info['vehicle_id'] = vehicle_id_array # 世界类别id
-                scenario_agent_frame_info['num_lidar_pts'] = num_lidar_pts_array # 世界点云数目（目标上的点数）
-                scenario_agent_frame_info['camera_visibility'] = camera_visibility_array # 世界目标是否可见
                 scenario_agent_frame_info['sample_interval'] = sample_interval # 采样频率，决定帧间隔，原文为0.5s也就是间隔5采样
-
+                scenario_agent_frame_info['vehicle_speed_x'] = agent_speed_x # 对象的x速度 # type: ignore
+                scenario_agent_frame_info['vehicle_speed_y'] = agent_speed_y # 对象的y速度 # type: ignore
+                if load_anno:
+                    scenario_agent_frame_info['gt_names'] = label_array # 世界类别gt # type: ignore
+                    scenario_agent_frame_info['gt_boxes'] = bbox_array # 世界boxes # type: ignore
+                    scenario_agent_frame_info['gt_velocity'] = vel_array# 世界速度gt # type: ignore
+                    scenario_agent_frame_info['vehicle_id'] = vehicle_id_array # 世界类别id # type: ignore
+                    scenario_agent_frame_info['num_lidar_pts'] = num_lidar_pts_array # 世界点云数目（目标上的点数） # type: ignore
+                    scenario_agent_frame_info['camera_visibility'] = camera_visibility_array # 世界目标是否可见 # type: ignore
+                    scenario_agent_frame_info['valid_flag'] = valid_flag # 雷达是否可见 # type: ignore
                 result.append(scenario_agent_frame_info)
     return result
 
 
 def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_path=None, sample_interval = 5):
     assert sample_interval >= 1
-    dirs = os.listdir(data_path)
-    total = len(deepaccident_folder_struct)
-    for dir in dirs:
-        if dir in deepaccident_folder_struct:
-            total -= 1
-    assert (total == 0),f"Dataset is not well formatted and requires the following structure: {deepaccident_folder_struct}"
+    _check_dataset_folder(data_path, deepaccident_folder_struct)
     train_split_items = _read_list_file(osp.join(data_path,'split_txt_files'),'train',split=' ')
     val_split_items = _read_list_file(osp.join(data_path,'split_txt_files'),'val',split=' ')
     # assume test equals val
@@ -166,11 +179,11 @@ def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_pat
     output_dict['data_list'] = deepaccident_infos_val
     mmengine.dump(output_dict, filename)
     mmengine.print_log(f'DeepAccident info val file is saved to {filename}','current')
-    deepaccident_infos_test = _get_detail_info(test_split_items,data_path,sample_interval)
-    filename = osp.join(save_path,f'{pkl_prefix}_infos_test.pkl')
-    output_dict['data_list'] = deepaccident_infos_test
-    mmengine.dump(output_dict, filename)
-    mmengine.print_log(f'DeepAccident info test file is saved to {filename}, assume test equals val','current')
+    # deepaccident_infos_test = _get_detail_info(test_split_items,data_path,sample_interval)
+    # filename = osp.join(save_path,f'{pkl_prefix}_infos_test.pkl')
+    # output_dict['data_list'] = deepaccident_infos_test
+    # mmengine.dump(output_dict, filename)
+    # mmengine.print_log(f'DeepAccident info test file is saved to {filename}, assume test equals val','current')
 
     
     

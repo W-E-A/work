@@ -28,34 +28,35 @@ class Communication(BaseModule):
         gaussian_kernel = _gen_gaussian_kernel(k_size, sigma)
         self.gaussian_filter.weight.data = torch.Tensor(gaussian_kernel).to(self.gaussian_filter.weight.device).unsqueeze(0).unsqueeze(0)
 
-    def forward(self, agent_psm, ego_idx):
+    def forward(self, agent_psms, ego_idx):
 
-        communication_masks = []
-        communication_maps = []
-        communication_rates = []
+        B, N, C, H, W = agent_psms.shape
+        device = agent_psms.device
+        psms = agent_psms.reshape(B*N, C, H, W)
 
-        for idx, psm in enumerate(agent_psm):
-            # [bs, 2, H, W]
-            ori_communication_map = psm.sigmoid().max(dim=1)[0].unsqueeze(1) # dim1=2 represents the confidence of two anchors
-            # [bs, 1, H, W] in [0, 1]
-            if self.smooth:
-                communication_map = self.gaussian_filter(ori_communication_map)
-                # [bs, 1, H, W] in [0, 1] larger
-            else:
-                communication_map = ori_communication_map
-                # [bs, 1, H, W] in [0, 1] origin
+        # [bs*agents, 1, H, W]
+        ori_communication_maps = torch.max(torch.sigmoid(psms), dim=1, keepdim=True).values # dim1=2 represents the confidence of two anchors
+        if self.smooth:
+            communication_maps = self.gaussian_filter(ori_communication_maps)
+            # [bs*agents, 1, H, W] in [0, 1] larger
+        else:
+            communication_maps = ori_communication_maps
+            # [bs*agents, 1, H, W] in [0, 1] origin
 
-            ones_mask = torch.ones_like(communication_map).to(communication_map.device)
-            zeros_mask = torch.zeros_like(communication_map).to(communication_map.device)
-            communication_mask = torch.where(communication_map > self.thres, ones_mask, zeros_mask)
-            # [bs, 1, H, W] in {0,1}
+        communication_masks = torch.where(
+            communication_maps > self.thres,
+            torch.ones_like(communication_maps, device=device),
+            torch.zeros_like(communication_maps, device=device)
+        )
+        # [bs*agents, 1, H, W] in {0, 1}
 
-            communication_rate = communication_mask.sum() / communication_mask.numel()
+        communication_rates = torch.sum(communication_masks, dim=(-1, -2, -3)) / communication_masks.size()[-3:].numel()
+        # [bs*agents, ]
 
-            if idx == ego_idx:
-                communication_mask = ones_mask.clone()
+        # multi ego_idx TODO
+        communication_masks[ego_idx::N, ...] = torch.ones((1, H, W), device=device)
 
-            communication_masks.append(communication_mask)
-            communication_maps.append(ori_communication_map)
-            communication_rates.append(communication_rate) # avg batch comm rate for each agent
-        return communication_masks, communication_maps, communication_rates
+        return communication_masks.reshape(B, N, 1, H, W), \
+            ori_communication_maps.reshape(B, N, 1, H, W), \
+            communication_maps.reshape(B, N, 1, H, W), \
+            list(communication_rates)

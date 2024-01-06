@@ -1,5 +1,5 @@
 custom_imports = dict(
-    imports=['projects.Where2comm.models'],
+    imports=['projects.Where2comm', 'projects.Where2comm.models'],
     allow_failed_imports=False
 )
 
@@ -78,7 +78,7 @@ test_pipline = [
           lidar_range = lidar_range, 
           voxel_size = voxel_size, 
           num_point_feature = 4,
-          max_num_voxels = 40000,
+          max_num_voxels = 70000,
           max_points_per_voxel = 32),
      dict(type = 'GenerateGT',
           order = order,
@@ -112,8 +112,8 @@ test_pipline = [
 ]
 
 train_dataloader = dict(
-    batch_size=12,
-    num_workers=8,
+    batch_size=10,
+    num_workers=4,
     pin_memory=True,
     drop_last=True,
     sampler=dict(
@@ -152,7 +152,6 @@ test_evaluator = dict(
 model = dict(
     type = 'Where2comm',
     co_agents = 2,
-    multi_scale = False,
     voxel_size = voxel_size,
     downsample_rate = downsample_rate,
     data_preprocessor = dict(type='BaseDataPreprocessor'),
@@ -207,27 +206,32 @@ model = dict(
         type = 'Communication',
         thres = 0.01,
         smooth = True,
-        smooth_k_size = 5,
+        smooth_k_size = 7,
         smooth_sigma = 1.0
     ),
     pts_fusion_module=dict(
         type = 'ScaledDotProductAttenFusion'
     ),
+    # pts_loss_module=dict(
+    #     type = 'Where2commLoss',
+    #     num_classes = 2,
+    #     cls_weight = 1.0,
+    #     cls_alpha = 0.25,
+    #     focal_gamma = 2.0,
+    #     reg_weight = 2.0,
+    #     use_dir = False,
+    #     smooth_beta = 1.0 / 9.0
+    # ),
     pts_loss_module=dict(
-        type = 'Where2commLoss',
-        num_classes = 2,
-        cls_weight = 1.0,
-        cls_alpha = 0.25,
-        focal_gamma = 2.0,
-        reg_weight = 2.0,
-        use_dir = False,
-        smooth_beta = 1.0 / 9.0
+        type = 'PointPillarLoss',
     ),
     test_cfg=dict(
-        score_threshold = 0.2,
+        agent_threshold = [0.01, 0.01],
+        fusion_threshold = 0.01,
         order = order,
         nms_threshold = 0.15,
         lidar_range = lidar_range,
+        only_vis = True
     )
 )
 
@@ -239,7 +243,7 @@ default_hooks = dict(
                 sampler_seed=dict(type='DistSamplerSeedHook'),
                 logger=dict(type='LoggerHook', interval=1),
                 param_scheduler=dict(type='ParamSchedulerHook'),
-                checkpoint=dict(type='CheckpointHook', interval=1),
+                checkpoint=dict(type='CheckpointHook', interval=2),
             )
 
 env_cfg = dict(
@@ -269,12 +273,11 @@ log_level = 'INFO'
 load_from = None
 resume = False
 
-lr = 0.002
 optim_wrapper = dict(
     type='OptimWrapper',
     optimizer=dict(
         type='AdamW',
-        lr=lr,
+        lr=0.002,
         weight_decay=1e-4
      ),
     # max_norm=10 is better for SECOND
@@ -306,15 +309,15 @@ param_scheduler = [
         gamma=0.1)
 ]
 
-# visualizer=dict(
-#     type='Visualizer',
-#     name='comm_vis',
-#     vis_backends=[
-#         dict(type='LocalVisBackend'),
-#         # dict(type='TensorboardVisBackend'),
-#     ],
-#     save_dir='comm_mask'
-# )
+visualizer=dict(
+    type='Visualizer',
+    # name='comm_vis',
+    vis_backends=[
+        # dict(type='LocalVisBackend'),
+        dict(type='TensorboardVisBackend'),
+    ],
+    # save_dir='comm_mask'
+)
 
 # Default setting for scaling LR automatically
 #   - `enable` means enable scaling LR automatically
