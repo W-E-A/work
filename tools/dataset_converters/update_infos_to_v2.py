@@ -444,6 +444,7 @@ def update_deepaccident_infos(pkl_path, out_dir, keep, convert_camera_instance):
                 empty_instance['bbox_label_3d'] = copy.deepcopy(empty_instance['bbox_label']) # type: ignore
                 empty_instance['velocity'] = ori_info_dict['gt_velocity'][i, :].astype(np.float32).tolist() # array to list here 2
                 empty_instance['num_lidar_pts'] = ori_info_dict['num_lidar_pts'][i]
+                empty_instance['track_id'] = ori_info_dict['vehicle_id'][i]
                 empty_instance['bbox_3d_isvalid'] = ori_info_dict['valid_flag'][i] # bool
                 empty_instance = clear_instance_unused_keys(empty_instance)
                 temp_data_info['instances'].append(empty_instance) # type: ignore

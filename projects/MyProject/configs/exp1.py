@@ -3,9 +3,9 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
-train_annfile_path = 'data/deepaccident/v2_deepaccident_infos_train.pkl'
-val_annfile_path = 'data/deepaccident/v2_deepaccident_infos_val.pkl'
-test_annfile_path = 'data/deepaccident/v2_deepaccident_infos_val.pkl'
+train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
+val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
+test_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
 
 classes = [
     'car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian'
@@ -25,7 +25,7 @@ out_factor = 4
 det_out_factor = 4
 motion_out_factor = 4
 
-seq_length = 7
+seq_length = 100
 present_idx = 1
 # co_agents = ('ego_vehicle', 'infrastructure')
 co_agents = ('ego_vehicle',)
@@ -55,7 +55,13 @@ train_pipline = [
         coord_type='LIDAR',
         load_dim=4,
         use_dim=4,),
-    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
+    dict(
+        type='LoadAnnotations3DV2X',
+        with_bbox_3d=True,
+        with_label_3d=True,
+        with_bbox_3d_isvalid=True,
+        with_track_id=True,
+        ),
     # dict(type='ObjectSample', db_sampler=db_sampler),
     # dict(
     #     type='GlobalRotScaleTrans',
@@ -68,12 +74,13 @@ train_pipline = [
     #     flip_ratio_bev_horizontal=0.5,
     #     flip_ratio_bev_vertical=0.5),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
-    dict(type='ObjectRangeFilter', point_cloud_range=lidar_range),
-    # dict(type='ObjectNameFilter', classes=class_names),
+    dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
+    dict(type='ObjectNameFilterV2X', classes=classes),
+    dict(type='ObjectTrackIDFilterV2X', ids=[-100, -1]), # ego
     dict(type='PointShuffle'),
     dict(
         type='Pack3DDetInputsV2X',
-        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d'])
+        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id'])
 ]
 
 train_dataloader = dict(

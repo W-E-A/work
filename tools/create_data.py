@@ -244,13 +244,13 @@ def semantickitti_data_prep(info_prefix, out_dir):
 def deepaccident_data_prep(root_path, info_prefix, version, out_dir, sample_interval, keep_old_format=True, convert_camera_instance=False):
     if version == 'mini':
         raise NotImplementedError('Can not handle mini version.')
-    # dpac.create_deepaccident_info_file(root_path,info_prefix,out_dir,sample_interval)
+    dpac.create_deepaccident_info_file(root_path,info_prefix,out_dir,sample_interval)
     info_train_path = osp.join(out_dir, f'{info_prefix}_infos_train.pkl')
     info_val_path = osp.join(out_dir, f'{info_prefix}_infos_val.pkl')
     # info_test_path = osp.join(out_dir, f'{info_prefix}_infos_test.pkl')
     update_pkl_infos('deepaccident', out_dir=out_dir, pkl_path=info_train_path, keep=keep_old_format, convert_camera_instance=convert_camera_instance)
     update_pkl_infos('deepaccident', out_dir=out_dir, pkl_path=info_val_path, keep=keep_old_format, convert_camera_instance=convert_camera_instance)
-    # TODO
+    # FIXME
     # create_groundtruth_database(dataset_name, root_path, info_prefix,
     #                             f'{info_prefix}_infos_train.pkl')
 

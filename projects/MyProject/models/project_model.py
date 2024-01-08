@@ -142,8 +142,8 @@ class ProjectModel(MVXTwoStageDetector):
                 **kwargs) -> Union[Dict[str, torch.Tensor], list]:
         """
         scene_info: batch list of BaseDataElement
-        example_seq: seq list - agent list - batch list of dict(inputs, single_samples, coop_samples) inputs[imgs, points, voxels] list[Tensor]
-        or Tensor, single_samples, coop_samples: batch list of Det3DSamples
+        example_seq: seq list - agent list - batch list of dict(inputs, data_samples) inputs[imgs, points, voxels] list[Tensor]
+        or Tensor, data_samples: batch list of Det3DSamples
 
         DATA_SAMPLES:
 
@@ -159,34 +159,50 @@ class ProjectModel(MVXTwoStageDetector):
         co_length = scene_info[0].co_length
         co_agents = scene_info[0].co_agents
         seq_length = scene_info[0].seq_length
+        scene_length = scene_info[0].scene_length
         present_idx = scene_info[0].present_idx
         batch_size = len(scene_info)
         print(scene_info[0])
 
         #############################################################################
         import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle
+        from matplotlib.cm import get_cmap
+        # seq_length in exp1 must be a very large positive int, and use adaptive seq length settings.
+        assert seq_length == scene_length
 
-        grid_size = self.pts_train_cfg.get('grid_size', None)
-        voxel_size = self.pts_train_cfg.get('voxel_size', None)
-        point_cloud_range = self.pts_train_cfg.get('point_cloud_range', None)
-        out_size_factor = self.pts_train_cfg.get('out_size_factor', None)
-        offset_x = point_cloud_range[0] + voxel_size[0] * 0.5
-        offset_y = point_cloud_range[1] + voxel_size[1] * 0.5
+        cmaps = [
+            'Greys', 'Purples', 'Greens', 'Oranges', 'Reds',
+            'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
+            'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
+        ]
 
-        # FIXME load bev map?
+        grid_size = self.pts_train_cfg.get('grid_size', None) # type: ignore
+        voxel_size = self.pts_train_cfg.get('voxel_size', None) # type: ignore
+        # point_cloud_range = self.pts_train_cfg.get('point_cloud_range', None) # type: ignore
+        # out_size_factor = self.pts_train_cfg.get('out_size_factor', None) # type: ignore
+        # offset_x = point_cloud_range[0] + voxel_size[0] * 0.5
+        # offset_y = point_cloud_range[1] + voxel_size[1] * 0.5
 
-        ego_pose = [] # global
-        single_gt_boxes_center = [] # global
-        coop_gt_boxes_center = [] # global
+        predict_size = 8 # 4 second for motion prediction
+        seq_start_from = 0 # ego motion start timestamp
+        random_start = True
+        distance_thres = 30 # 20m for candidates
+        interrupt_thres = 5 # 5m for potential interrupts
+
+        if random_start:
+            seq_start_from = np.random.randint(0, seq_length - predict_size + 1)
+        else:
+            seq_start_from = min(max(seq_start_from, 0), seq_length - predict_size)
+
+        track_map = {}
         
-        for i in range(seq_length):
-            ego_example_seq = example_seq[i][0]
-            inputs = ego_example_seq['inputs']
-            single_samples = ego_example_seq['single_samples'][0]
-            coop_samples = ego_example_seq['coop_samples'][0]
-            
-            bev_path = coop_samples.metainfo['bev_path']
-            if i == 0:
+        ego_pose = [] # global
+        for i in range(seq_start_from, seq_length):
+            data_samples = example_seq[i][0]['data_samples'][0]
+
+            bev_path = data_samples.metainfo['bev_path']
+            if i == seq_start_from:
                 bev_insmap = np.load(bev_path)['data'] # npz
                 H, W, _ = bev_insmap.shape # type: ignore
                 h, w, _ = tuple(grid_size)
@@ -196,29 +212,35 @@ class ProjectModel(MVXTwoStageDetector):
                 maxy = max(min(h + (H - h) // 2, grid_size[0]), 1)
                 bev_insmap = bev_insmap[miny:maxy,minx:maxx] # type: ignore
 
-            ego_frame_metainfo = coop_samples.metainfo
+            ego_frame_metainfo = data_samples.metainfo
             ego2global = torch.tensor(ego_frame_metainfo['ego2global'], dtype=torch.float32, device=get_device())
             lidar2ego = torch.tensor(ego_frame_metainfo['lidar2ego'], dtype=torch.float32, device=get_device())
             lidar2global = ego2global @ lidar2ego # 4 4
 
-            single_gt_boxes_center_lidar = single_samples.gt_instances_3d.bboxes_3d.gravity_center.unsqueeze(0) # 1 N 3
-            single_gt_boxes_center_global = simple_points_project(single_gt_boxes_center_lidar, lidar2global)# 1 N 3
+            lidar2global_rotation_T = lidar2global[:3, :3].T
+            lidar2global_translation = lidar2global[:3, 3]
+            data_samples.gt_instances_3d.bboxes_3d.rotate(lidar2global_rotation_T, None)
+            data_samples.gt_instances_3d.bboxes_3d.translate(lidar2global_translation)
 
-            coop_gt_boxes_center_lidar = coop_samples.gt_instances_3d.bboxes_3d.gravity_center.unsqueeze(0) # 1 N 3
-            coop_gt_boxes_center_global = simple_points_project(coop_gt_boxes_center_lidar, lidar2global)# 1 N 3
+            # gt_boxes_center_lidar = data_samples.gt_instances_3d.bboxes_3d.gravity_center.unsqueeze(0) # 1 N 3
+            # gt_boxes_center_global = simple_points_project(gt_boxes_center_lidar, lidar2global)# 1 N 3
+
+            instances = data_samples.gt_instances_3d
+            if i == seq_start_from: # 第一帧雷达可视范围内检测到了， 之后用的真值认为是预测结果
+                instances = instances[instances.bbox_3d_isvalid == False] # type: ignore
+            track_id = instances.track_id
+            for id in track_id:
+                if i == seq_start_from: # 启动第一帧跟踪所有可视的对象的id
+                    track_map[id.item()] = {
+                        'cmap': cmaps[np.random.randint(0, len(cmaps))],
+                        'instance': instances[track_id == id.item()],
+                    }
+                elif id.item() in track_map:
+                    if len(track_map[id.item()]['instance']) >= predict_size: # 对于跟踪大于预测之后停止跟踪，认为是当前的motion预测的值
+                        continue
+                    track_map[id.item()]['instance'] = InstanceData.cat([track_map[id.item()]['instance'], instances[track_id == id.item()]])
 
             ego_pose.append(ego2global) # type: ignore
-            single_gt_boxes_center.append(single_gt_boxes_center_global)
-            coop_gt_boxes_center.append(coop_gt_boxes_center_global)
-
-        ego_pose_base = ego_pose[0] # fake world
-        ego_pose_rela = calc_relative_pose(ego_pose_base, ego_pose)
-        single_gt_boxes_center_rela = [] # rela
-        coop_gt_boxes_center_rela = [] # rela
-        for i in range(seq_length):
-            single_gt_boxes_center_rela.append(simple_points_project(single_gt_boxes_center[i], torch.linalg.inv(ego_pose_base)).squeeze(0))
-            coop_gt_boxes_center_rela.append(simple_points_project(coop_gt_boxes_center[i], torch.linalg.inv(ego_pose_base)).squeeze(0))
-        ego_pose_rela_center = torch.stack([pose[:2, 3] for pose in ego_pose_rela]) # [7, 2]
         
         scatter_trans = torch.tensor(
             [[0, 1],
@@ -226,24 +248,74 @@ class ProjectModel(MVXTwoStageDetector):
              dtype=torch.float32,
              device=get_device()
         )
-        ego_pose_rela_center = ego_pose_rela_center @ scatter_trans.T
-        ego_pose_rela_center_x = torch.clip(torch.round(ego_pose_rela_center[:, 0] / voxel_size[0] + grid_size[1] * 0.5),0,grid_size[1] - 1).int()
-        ego_pose_rela_center_y = torch.clip(torch.round(ego_pose_rela_center[:, 1] / voxel_size[1] + grid_size[0] * 0.5),0,grid_size[0] - 1).int()
+        ego_pose_base = ego_pose[0] # fake world，基于第一帧检测起点作为EGO当前帧的所有目标的基准世界位置
+        ego_pose_rela = calc_relative_pose(ego_pose_base, ego_pose)
+        ego_pose_rela_center = torch.stack([pose[:2, 3] for pose in ego_pose_rela]) # [7, 2] EGO 规划真值位置序列
+        ego_start_center = ego_pose_rela_center[0]
+
+        ego_pose_rela_center_vis = ego_pose_rela_center @ scatter_trans.T # EGO 规划平面位置序列
+        ego_pose_rela_x_vis = torch.round(ego_pose_rela_center_vis[:, 0] / voxel_size[0] + grid_size[1] * 0.5).int().cpu().numpy()
+        ego_pose_rela_y_vis = torch.round(ego_pose_rela_center_vis[:, 1] / voxel_size[1] + grid_size[0] * 0.5).int().cpu().numpy()
+        distance_radius = distance_thres / voxel_size[0] # FIXME
+        interrupt_radius = interrupt_thres / voxel_size[0] # FIXME
         
         fig, ax = plt.subplots(1, 1)
         ax.imshow(bev_insmap) # type: ignore
+        ego_cmap = get_cmap('Blues')
+        c = np.linspace(0.0, 1.0, seq_length - seq_start_from)[::-1]
+        ax.scatter(ego_pose_rela_x_vis, ego_pose_rela_y_vis, c=c, cmap='Blues', s=6)
+        circle = Circle((ego_pose_rela_x_vis[0], ego_pose_rela_y_vis[0]), distance_radius, edgecolor='cyan', fill=False, linewidth=0.5) # 第一帧的匹配范围绘制
+        circles = [Circle((ego_pose_rela_x_vis[i], ego_pose_rela_y_vis[i]), interrupt_radius, edgecolor=ego_cmap(c[i]), fill=False, linewidth=0.25) for i in range(seq_length - seq_start_from)]
+        circles.append(circle)
+        for circle in circles:
+            ax.add_patch(circle)
 
-        ax.scatter(ego_pose_rela_center_x.cpu().numpy(), ego_pose_rela_center_y.cpu().numpy(), c=list(range(seq_length))[::-1], cmap='Blues', s=2)
-        for i in range(seq_length):
-            # single = single_gt_boxes_center_rela[i][:, :2] @ scatter_trans.T
-            # single_x = torch.clip(torch.round(single[:, 0] / voxel_size[0] + grid_size[1] * 0.5),0,grid_size[1] - 1).int()
-            # single_y = torch.clip(torch.round(single[:, 1] / voxel_size[1] + grid_size[0] * 0.5),0,grid_size[0] - 1).int()
-            # ax.scatter(single_x.cpu().numpy(), single_y.cpu().numpy(), c='red', s=2)
-            coop = coop_gt_boxes_center_rela[i][:, :2] @ scatter_trans.T
-            coop_x = torch.clip(torch.round(coop[:, 0] / voxel_size[0] + grid_size[1] * 0.5),0,grid_size[1] - 1).int()
-            coop_y = torch.clip(torch.round(coop[:, 1] / voxel_size[1] + grid_size[0] * 0.5),0,grid_size[0] - 1).int()
-            ax.scatter(coop_x.cpu().numpy(), coop_y.cpu().numpy(), c='red', s=2)
-        
+        for i, seq in enumerate(list(range(seq_start_from, seq_length))): # 绘制从seq_start_from开始到结束的EGO驾驶规划意图
+            ax.text(ego_pose_rela_x_vis[i], ego_pose_rela_y_vis[i], s=str(seq), fontsize=3, ha='center', va='center')
+            ax.text(ego_pose_rela_x_vis[i], ego_pose_rela_y_vis[i], s="  EGO", fontsize=3, ha='left', va='center')
+
+        # 开始筛选目标，判断潜在的碰撞风险
+        for track_id, v in track_map.items():
+            cmap = v['cmap']
+            instance = v['instance']
+            last = len(instance)
+            if last < predict_size: # 预测长度不足predict_size的跟踪轨迹直接忽略（实际motion输出一定是定长的）
+                continue
+            label = instance.labels_3d[0]
+            
+            gt_boxes_xyz_global = instance.bboxes_3d.gravity_center.unsqueeze(0) # [1, N, 3] 基于真实世界的位置需要转换到相对于基准位置
+            gt_boxes_xyz_rela = simple_points_project(gt_boxes_xyz_global, torch.linalg.inv(ego_pose_base)).squeeze(0) # [N, 3] moiton 预测真值位置序列
+            gt_boxes_center_rela = gt_boxes_xyz_rela[:, :2]
+            start_center = gt_boxes_center_rela[0]
+            if torch.norm(start_center - ego_start_center) > distance_thres: # 第一帧检测范围内的目标作为潜在候选
+                continue
+            valid = False
+            interrupt_seq = []
+            interrupt_i = []
+            for i, seq in enumerate(list(range(seq_start_from, seq_start_from + predict_size))):
+                center = gt_boxes_center_rela[i] # 这里是跟踪的固定长度
+                ego_center = ego_pose_rela_center[i] # 这里必须从整个轨迹序列中开始取得
+                if torch.norm(center - ego_center) <= interrupt_thres:
+                    valid = True
+                    interrupt_seq.append(seq)
+                    interrupt_i.append(i)
+
+            gt_boxes_center_vis = gt_boxes_center_rela @ scatter_trans.T # [N, 2] moiton 预测平面位置序列
+            gt_boxes_x_vis = torch.round(gt_boxes_center_vis[:, 0] / voxel_size[0] + grid_size[1] * 0.5).int().cpu().numpy()
+            gt_boxes_y_vis = torch.round(gt_boxes_center_vis[:, 1] / voxel_size[1] + grid_size[0] * 0.5).int().cpu().numpy()
+            
+            if not valid:
+                ax.scatter(gt_boxes_x_vis, gt_boxes_y_vis, c='black', s=1)
+                for i, seq in enumerate(list(range(seq_start_from, seq_start_from + predict_size))):
+                    ax.text(gt_boxes_x_vis[i], gt_boxes_y_vis[i], s="  " + str(seq), fontsize=2.0, ha='left', va='top')
+                    ax.text(gt_boxes_x_vis[i], gt_boxes_y_vis[i], s="  " + str(track_id), fontsize=2.0, ha='left', va='bottom')
+            else:
+                ax.scatter(gt_boxes_x_vis, gt_boxes_y_vis, c=np.arange(predict_size)[::-1], cmap=cmap, s=2)
+                for i, seq in enumerate(list(range(seq_start_from, seq_start_from + predict_size))):
+                    ax.text(gt_boxes_x_vis[i], gt_boxes_y_vis[i], s="  " + str(seq), fontsize=2.0, ha='left', va='top')
+                    ax.text(gt_boxes_x_vis[i], gt_boxes_y_vis[i], s="  " + str(track_id), fontsize=2.0, ha='left', va='bottom')
+                    if i in interrupt_i:
+                        ax.scatter(gt_boxes_x_vis[i], gt_boxes_y_vis[i], marker='o', facecolors='none', edgecolors='blue', s=20, linewidths= 0.5)
         fig.savefig('./motion.png', dpi = 800)
         
         import pdb

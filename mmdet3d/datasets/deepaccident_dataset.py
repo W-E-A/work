@@ -10,9 +10,10 @@ import mmengine
 from mmengine.logging import print_log
 from logging import WARNING
 import numpy as np
-from mmengine.structures import BaseDataElement, InstanceData
-from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes, Det3DDataSample
+from mmengine.structures import BaseDataElement
+from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes, DepthInstance3DBoxes
 from mmdet3d.datasets.transforms.formating import Pack3DDetInputs
+from mmdet3d.datasets.transforms.loading import LoadAnnotations3D
 from os import path as osp
 import copy
 
@@ -22,7 +23,7 @@ import copy
 #         super().__init__(*args, **kwargs)
 
 #     def transform(self, results: Dict) -> Union[Dict,Tuple[List, List],None]:
-#         pass
+#         return None
 
 
 @TRANSFORMS.register_module()
@@ -35,11 +36,181 @@ class LoadPointsNPZ(LoadPointsFromFile):
         pc = np.load(pts_filename)['data']
         return pc
 
+
+@TRANSFORMS.register_module()
+class LoadAnnotations3DV2X(LoadAnnotations3D):
+    def __init__(self,
+                 *args,
+                 with_bbox_3d_isvalid: bool = True,
+                 with_track_id: bool = True,
+                 **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.with_bbox_3d_isvalid = with_bbox_3d_isvalid
+        self.with_track_id = with_track_id
+
+    def _load_bbox_3d_isvalid(self, results: dict) -> dict:
+        results['bbox_3d_isvalid'] = results['ann_info']['bbox_3d_isvalid']
+        return results
+    
+    def _load_track_id(self, results: dict) -> dict:
+        results['track_id'] = results['ann_info']['track_id']
+        return results
+
+    def transform(self, results: dict) -> dict:
+        results = super().transform(results)
+        if self.with_bbox_3d_isvalid:
+            results = self._load_bbox_3d_isvalid(results)
+        if self.with_track_id:
+            results = self._load_track_id(results)
+        return results
+
+    def __repr__(self) -> str:
+        repr_str = super().__repr__()
+        indent_str = '    '
+        repr_str = self.__class__.__name__ + '(\n'
+        repr_str += f'{indent_str}with_bbox_3d_isvalid={self.with_bbox_3d_isvalid}, '
+        repr_str += f'{indent_str}with_track_id={self.with_track_id}, '
+
+        return repr_str
+
+
+@TRANSFORMS.register_module()
+class ObjectRangeFilterV2X(BaseTransform):
+
+    def __init__(self, point_cloud_range: List[float]) -> None:
+        self.pcd_range = np.array(point_cloud_range, dtype=np.float32)
+
+    def transform(self, input_dict: dict) -> dict:
+        """Transform function to filter objects by the range.
+
+        Args:
+            input_dict (dict): Result dict from loading pipeline.
+
+        Returns:
+            dict: Results after filtering, 'gt_bboxes_3d', 'gt_labels_3d'
+            keys are updated in the result dict.
+        """
+        # Check points instance type and initialise bev_range
+        if isinstance(input_dict['gt_bboxes_3d'],
+                      (LiDARInstance3DBoxes, DepthInstance3DBoxes)):
+            bev_range = self.pcd_range[[0, 1, 3, 4]] # type: ignore
+        elif isinstance(input_dict['gt_bboxes_3d'], CameraInstance3DBoxes):
+            bev_range = self.pcd_range[[0, 2, 3, 5]] # type: ignore
+
+        gt_bboxes_3d = input_dict['gt_bboxes_3d']
+        gt_labels_3d = input_dict['gt_labels_3d']
+        bbox_3d_isvalid = input_dict['bbox_3d_isvalid']
+        track_id = input_dict['track_id']
+        mask = gt_bboxes_3d.in_range_bev(bev_range) # type: ignore
+        gt_bboxes_3d = gt_bboxes_3d[mask]
+        # mask is a torch tensor but gt_labels_3d is still numpy array
+        # using mask to index gt_labels_3d will cause bug when
+        # len(gt_labels_3d) == 1, where mask=1 will be interpreted
+        # as gt_labels_3d[1] and cause out of index error
+        gt_labels_3d = gt_labels_3d[mask.numpy().astype(bool)]
+        bbox_3d_isvalid = bbox_3d_isvalid[mask.numpy().astype(bool)]
+        track_id = track_id[mask.numpy().astype(bool)]
+
+        # limit rad to [-pi, pi]
+        gt_bboxes_3d.limit_yaw(offset=0.5, period=2 * np.pi)
+        input_dict['gt_bboxes_3d'] = gt_bboxes_3d
+        input_dict['gt_labels_3d'] = gt_labels_3d
+        input_dict['bbox_3d_isvalid'] = bbox_3d_isvalid
+        input_dict['track_id'] = track_id
+
+        return input_dict
+
+    def __repr__(self) -> str:
+        """str: Return a string that describes the module."""
+        repr_str = self.__class__.__name__
+        repr_str += f'(point_cloud_range={self.pcd_range.tolist()})'
+        return repr_str
+
+
+@TRANSFORMS.register_module()
+class ObjectNameFilterV2X(BaseTransform):
+    """Filter GT objects by their names.
+
+    Required Keys:
+
+    - gt_labels_3d
+
+    Modified Keys:
+
+    - gt_labels_3d
+
+    Args:
+        classes (list[str]): List of class names to be kept for training.
+    """
+
+    def __init__(self, classes: List[str]) -> None:
+        self.classes = classes
+        self.labels = list(range(len(self.classes)))
+
+    def transform(self, input_dict: dict) -> dict:
+        """Transform function to filter objects by their names.
+
+        Args:
+            input_dict (dict): Result dict from loading pipeline.
+
+        Returns:
+            dict: Results after filtering, 'gt_bboxes_3d', 'gt_labels_3d'
+            keys are updated in the result dict.
+        """
+        gt_labels_3d = input_dict['gt_labels_3d']
+        gt_bboxes_mask = np.array([n in self.labels for n in gt_labels_3d],
+                                  dtype=bool)
+        input_dict['gt_bboxes_3d'] = input_dict['gt_bboxes_3d'][gt_bboxes_mask]
+        input_dict['gt_labels_3d'] = input_dict['gt_labels_3d'][gt_bboxes_mask]
+        input_dict['bbox_3d_isvalid'] = input_dict['bbox_3d_isvalid'][gt_bboxes_mask]
+        input_dict['track_id'] = input_dict['track_id'][gt_bboxes_mask]
+
+        return input_dict
+
+    def __repr__(self) -> str:
+        """str: Return a string that describes the module."""
+        repr_str = self.__class__.__name__
+        repr_str += f'(classes={self.classes})'
+        return repr_str
+
+
+@TRANSFORMS.register_module()
+class ObjectTrackIDFilterV2X(BaseTransform):
+    def __init__(self, ids: List[str]) -> None:
+        self.ids = ids
+
+    def transform(self, input_dict: dict) -> dict:
+
+        track_id = input_dict['track_id']
+        gt_bboxes_mask = np.array([id not in self.ids for id in track_id], dtype=bool)
+        input_dict['gt_bboxes_3d'] = input_dict['gt_bboxes_3d'][gt_bboxes_mask]
+        input_dict['gt_labels_3d'] = input_dict['gt_labels_3d'][gt_bboxes_mask]
+        input_dict['bbox_3d_isvalid'] = input_dict['bbox_3d_isvalid'][gt_bboxes_mask]
+        input_dict['track_id'] = input_dict['track_id'][gt_bboxes_mask]
+
+        return input_dict
+
+    def __repr__(self) -> str:
+        """str: Return a string that describes the module."""
+        repr_str = self.__class__.__name__
+        repr_str += f'(ids={self.ids})'
+        return repr_str
+    
+
 @TRANSFORMS.register_module()
 class Pack3DDetInputsV2X(Pack3DDetInputs):
-    """
-    TODO pack other instances
-    """
+    INPUTS_KEYS = ['points', 'img']
+    INSTANCEDATA_3D_KEYS = [
+        'gt_bboxes_3d', 'gt_labels_3d', 'attr_labels', 'depths', 'centers_2d', 'bbox_3d_isvalid', 'track_id'
+    ]
+    INSTANCEDATA_2D_KEYS = [
+        'gt_bboxes',
+        'gt_bboxes_labels',
+    ]
+    SEG_KEYS = [
+        'gt_seg_map', 'pts_instance_mask', 'pts_semantic_mask',
+        'gt_semantic_seg'
+    ]
     def __init__(self,
                  *args,
                  meta_keys: tuple = (
@@ -58,20 +229,21 @@ class Pack3DDetInputsV2X(Pack3DDetInputs):
         
 
     def transform(self, results: Dict) -> Union[Dict,Tuple[List, List],None]:
-        packed_results = super().transform(results)
-        coop_samples = packed_results['data_samples'].clone() # type: ignore
-        single_samples = packed_results['data_samples'].clone() # type: ignore
-        if len(packed_results['data_samples'].gt_instances_3d) > 0: # type: ignore
-            mask = packed_results['data_samples'].gt_instances_3d.bboxes_3d.tensor[:, -1] > 0.5 # type: ignore
-            single_samples.gt_instances_3d = (single_samples.gt_instances_3d)[mask]
-            coop_samples.gt_instances_3d.bboxes_3d.tensor = coop_samples.gt_instances_3d.bboxes_3d.tensor[:, :-1]
-            coop_samples.gt_instances_3d.bboxes_3d.box_dim = coop_samples.gt_instances_3d.bboxes_3d.box_dim - 1
-            single_samples.gt_instances_3d.bboxes_3d.tensor = single_samples.gt_instances_3d.bboxes_3d.tensor[:, :-1]
-            single_samples.gt_instances_3d.bboxes_3d.box_dim = single_samples.gt_instances_3d.bboxes_3d.box_dim - 1
-        del packed_results['data_samples'] # type: ignore
-        packed_results['coop_samples'] = coop_samples # type: ignore
-        packed_results['single_samples'] = single_samples # type: ignore
-        return packed_results # type: ignore
+        # packed_results = super().transform(results)
+        # coop_samples = packed_results['data_samples'].clone() # type: ignore
+        # single_samples = packed_results['data_samples'].clone() # type: ignore
+        # if len(packed_results['data_samples'].gt_instances_3d) > 0: # type: ignore
+        #     mask = packed_results['data_samples'].gt_instances_3d.bboxes_3d.tensor[:, -1] > 0.5 # type: ignore
+        #     single_samples.gt_instances_3d = (single_samples.gt_instances_3d)[mask]
+        #     coop_samples.gt_instances_3d.bboxes_3d.tensor = coop_samples.gt_instances_3d.bboxes_3d.tensor[:, :-1]
+        #     coop_samples.gt_instances_3d.bboxes_3d.box_dim = coop_samples.gt_instances_3d.bboxes_3d.box_dim - 1
+        #     single_samples.gt_instances_3d.bboxes_3d.tensor = single_samples.gt_instances_3d.bboxes_3d.tensor[:, :-1]
+        #     single_samples.gt_instances_3d.bboxes_3d.box_dim = single_samples.gt_instances_3d.bboxes_3d.box_dim - 1
+        # del packed_results['data_samples'] # type: ignore
+        # packed_results['coop_samples'] = coop_samples # type: ignore
+        # packed_results['single_samples'] = single_samples # type: ignore
+        return super().transform(results) # type: ignore
+
 
 @TRANSFORMS.register_module()
 class PackSceneInfo(BaseTransform):
@@ -97,6 +269,7 @@ class PackSceneInfo(BaseTransform):
         results['scene_info'] = scene_meta
         return results
 
+
 @TRANSFORMS.register_module()
 class DropSceneKeys(BaseTransform):
     def __init__(self, keys:Tuple[str]) -> None:
@@ -107,6 +280,7 @@ class DropSceneKeys(BaseTransform):
                 del results[key]
         return results
         
+
 @DATASETS.register_module()
 class DeepAccident_Dataset(BaseDataset):
     """
@@ -242,6 +416,7 @@ class DeepAccident_Dataset(BaseDataset):
             data_list.append(scene_dict)
         return data_list
 
+
 @DATASETS.register_module()
 class DeepAccident_V2X_Dataset(Det3DDataset):
     """
@@ -357,25 +532,21 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
             if self.with_velocity:
                 gt_bboxes_3d = ann_info['gt_bboxes_3d']
                 gt_velocities = ann_info['velocities']
-                gt_isvalid = ann_info['bbox_3d_isvalid'][:, None]
                 nan_mask = np.isnan(gt_velocities[:, 0])
                 gt_velocities[nan_mask] = [0.0, 0.0]
-                gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocities, gt_isvalid.astype(np.int64)],
-                                              axis=-1) # 7 + 2 + 1
+                gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocities], axis=-1) # 7 + 2
                 ann_info['gt_bboxes_3d'] = gt_bboxes_3d
             else:
                 gt_bboxes_3d = ann_info['gt_bboxes_3d']
-                gt_isvalid = ann_info['bbox_3d_isvalid'][:, None]
-                gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_isvalid.astype(np.int64)],
-                                              axis=-1) # 7 + 1
+                gt_bboxes_3d = np.concatenate([gt_bboxes_3d], axis=-1) # 7
                 ann_info['gt_bboxes_3d'] = gt_bboxes_3d
         else:
             # empty instance
             ann_info = dict()
             if self.with_velocity:
-                ann_info['gt_bboxes_3d'] = np.zeros((0, 10), dtype=np.float32)
+                ann_info['gt_bboxes_3d'] = np.zeros((0, 9), dtype=np.float32)
             else:
-                ann_info['gt_bboxes_3d'] = np.zeros((0, 8), dtype=np.float32)
+                ann_info['gt_bboxes_3d'] = np.zeros((0, 7), dtype=np.float32)
             ann_info['gt_labels_3d'] = np.zeros(0, dtype=np.int64)
 
             if self.load_type in ['fov_image_based', 'mv_image_based']:
@@ -439,19 +610,17 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
             data['co_length'] = len(self.co_agents)
             for agent in self.co_agents:
                 agent_data_dict[agent] = sorted(agent_data_dict[agent], key=lambda x: x['timestamp'])
-                if 'scene_length' not in data.keys():
-                    data['scene_length'] = len(agent_data_dict[agent])
                 if 'scene_timestamps' not in data.keys():
                     data['scene_timestamps'] = [agent_data_dict[agent][i]['timestamp'] for i in range(len(agent_data_dict[agent]))]
-            scene_length = data['scene_length']
-            if self.adeptive_seq_length and scene_length - self.seq_length + 1 <= 0:
-                self.seq_length = scene_length
+            data['scene_length'] = len(data['scene_timestamps'])
+            if self.adeptive_seq_length and data['scene_length'] - self.seq_length + 1 <= 0:
+                data['seq_length'] = data['scene_length']
             else:
-                assert scene_length - self.seq_length + 1 > 0, f"The obtained sequence length is too long, maximum length {scene_length}, required length {self.seq_length}"
-            for i in range(self.seq_length - 1, scene_length):
+                assert data['scene_length'] - self.seq_length + 1 > 0, f"The obtained sequence length is too long, maximum length {data['scene_length']}, required length {self.seq_length}"
+            for i in range(data['seq_length'] - 1, data['scene_length']):
                 frame = []
                 seq_timestamps = []
-                for j in range(i - self.seq_length + 1, i + 1):
+                for j in range(i - data['seq_length'] + 1, i + 1):
                     frame.append([agent_data_dict[agent][j] for agent in self.co_agents])
                     seq_timestamps.append(data['scene_timestamps'][j])
                 data_list.append({
@@ -489,14 +658,14 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
                     # after pipeline drop the example with empty annotations
                     # return None to random another in `__getitem__`
                     if example is None or len(
-                            example['single_samples'].gt_instances_3d.labels_3d) == 0:
+                            example['data_samples'].gt_instances_3d.labels_3d) == 0:
                         return None
 
                 if self.show_ins_var:
                     if 'ann_info' in ori_input_dict:
                         self._show_ins_var(
                             ori_input_dict['ann_info']['gt_labels_3d'],
-                            example['single_samples'].gt_instances_3d.labels_3d) # type: ignore
+                            example['data_samples'].gt_instances_3d.labels_3d) # type: ignore
                     else:
                         print_log(
                             "'ann_info' is not in the input dict. It's probably that "
