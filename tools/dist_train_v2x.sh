@@ -1,7 +1,9 @@
+cd "/ai/volume/work"
+
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate mm
 
-CONFIG=projects/Where2comm/configs/where2comm_dair-v2x-c_dist.py
+CONFIG=projects/MyProject/configs/exp1_dist.py
 GPUS=1
 NNODES=${NNODES:-1}
 NODE_RANK=${NODE_RANK:-0}

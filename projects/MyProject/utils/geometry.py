@@ -36,27 +36,18 @@ def calc_relative_pose(
     """
     T_AB = T_WA(left)^-1 * T_WB(right)
     """
-    left_inv = torch.linalg.inv(left)
+    if isinstance(left, np.ndarray):
+        left_inv = np.linalg.inv(left)
+    elif isinstance(left, Tensor):
+        left_inv = torch.linalg.inv(left)
     if isinstance(right, Sequence):
         result = [left_inv @ item for item in right]
     else:
         result = left_inv @ right
     return result
 
-
-def invert_matrix_egopose_numpy(egopose):
-    """ Compute the inverse transformation of a 4x4 egopose numpy matrix."""
-    inverse_matrix = np.zeros((4, 4), dtype=np.float32)
-    rotation = egopose[:3, :3]
-    translation = egopose[:3, 3]
-    inverse_matrix[:3, :3] = rotation.T
-    inverse_matrix[:3, 3] = -np.dot(rotation.T, translation)
-    inverse_matrix[3, 3] = 1.0
-
-    return inverse_matrix
-
-
-def mat2pose_vec(matrix: torch.Tensor):
+@array_converter(apply_to=('matrix',))
+def mat2vec(matrix: Union[np.ndarray, Tensor]):
     """
     Converts a 4x4 pose matrix into a 6-dof pose vector
     Args:
@@ -67,20 +58,20 @@ def mat2pose_vec(matrix: torch.Tensor):
     """
 
     # M[1, 2] = -sinx*cosy, M[2, 2] = +cosx*cosy
-    rotx = torch.atan2(-matrix[..., 1, 2], matrix[..., 2, 2])
+    rotx = torch.atan2(-matrix[..., 1, 2], matrix[..., 2, 2]) # type: ignore
 
     # M[0, 2] = +siny, M[1, 2] = -sinx*cosy, M[2, 2] = +cosx*cosy
-    cosy = torch.sqrt(matrix[..., 1, 2] ** 2 + matrix[..., 2, 2] ** 2)
-    roty = torch.atan2(matrix[..., 0, 2], cosy)
+    cosy = torch.sqrt(matrix[..., 1, 2] ** 2 + matrix[..., 2, 2] ** 2) # type: ignore
+    roty = torch.atan2(matrix[..., 0, 2], cosy) # type: ignore
 
     # M[0, 0] = +cosy*cosz, M[0, 1] = -cosy*sinz
-    rotz = torch.atan2(-matrix[..., 0, 1], matrix[..., 0, 0])
+    rotz = torch.atan2(-matrix[..., 0, 1], matrix[..., 0, 0]) # type: ignore
 
     rotation = torch.stack((rotx, roty, rotz), dim=-1)
 
     # Extract translation params
     translation = matrix[..., :3, 3]
-    return torch.cat((translation, rotation), dim=-1)
+    return torch.cat((translation, rotation), dim=-1) # type: ignore
 
 
 def euler2mat(angle: torch.Tensor):

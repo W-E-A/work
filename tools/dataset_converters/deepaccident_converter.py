@@ -99,8 +99,8 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
 
                         vel = label.split(' ')[8:10] # type: ignore
                         vel = list(map(float, vel))
-                        # reverse the y axis, Temporarily closed
-                        # vel = [vel[0], -vel[1]]
+                        # reverse the y axis
+                        vel = [vel[0], -vel[1]]
                         agent_id = int(label.split(' ')[-3]) # type: ignore
                         num_lidar_pts = int(label.split(' ')[-2]) # type: ignore
                         if label.split(' ')[-1] == 'True': # type: ignore
@@ -108,10 +108,28 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
                         else:
                             camera_visibility = 0
                         bbox_list.append((cls_label,bbox,vel,agent_id,num_lidar_pts,camera_visibility))
-                        if num_lidar_pts <= 0:
-                            valid_flag.append(True)
+                        if cls_label == 'pedestrian' or cls_label == 'motorcycle' or cls_label == 'cyclist':
+                            if agent == 'infrastructure':
+                                if num_lidar_pts <= 0:
+                                    valid_flag.append(False)
+                                else:
+                                    valid_flag.append(True)
+                            else:
+                                if num_lidar_pts <= 1:
+                                    valid_flag.append(False)
+                                else:
+                                    valid_flag.append(True)
                         else:
-                            valid_flag.append(False)
+                            if agent == 'infrastructure':
+                                if num_lidar_pts <= 0:
+                                    valid_flag.append(False)
+                                else:
+                                    valid_flag.append(True)
+                            else:
+                                if num_lidar_pts <= 4:
+                                    valid_flag.append(False)
+                                else:
+                                    valid_flag.append(True)
 
                     label_array = np.array([bbox[0] for bbox in bbox_list]).reshape(-1)
                     bbox_array = np.array([bbox[1] for bbox in bbox_list]).reshape(-1, 7)

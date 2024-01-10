@@ -1,5 +1,5 @@
 custom_imports = dict(
-    imports=['projects.MyProject.models',],
+    imports=['projects.MyProject',],
     allow_failed_imports=False
 )
 
@@ -20,15 +20,16 @@ det_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 det_center_range = [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 motion_range = [-50, -50, -5.0, 50, 50, 3.0]
 voxel_size = [0.1, 0.1, 8.0]
-grid_size = [1024, 1024, 1]
 out_factor = 4
 det_out_factor = 4
 motion_out_factor = 4
 
-seq_length = 100
-present_idx = 1
-# co_agents = ('ego_vehicle', 'infrastructure')
-co_agents = ('ego_vehicle',)
+# seq_length = 100
+seq_length = 1
+present_idx = 0
+key_interval = 1
+co_agents = ('ego_vehicle', 'infrastructure')
+# co_agents = ('ego_vehicle',)
 det_with_velocity = True
 det_tasks = [
     dict(num_class=1, class_names=['car']),
@@ -47,6 +48,7 @@ det_common_heads = dict(
 )
 
 train_batch_size = 1
+# train_batch_size = 2
 train_num_workers = 1
 
 train_pipline = [
@@ -62,25 +64,50 @@ train_pipline = [
         with_bbox_3d_isvalid=True,
         with_track_id=True,
         ),
+    dict(type='ConstructEGOBox'),
     # dict(type='ObjectSample', db_sampler=db_sampler),
-    # dict(
-    #     type='GlobalRotScaleTrans',
-    #     rot_range=[-0.3925, 0.3925],
-    #     scale_ratio_range=[0.95, 1.05],
-    #     translation_std=[0, 0, 0]),
-    # dict(
-    #     type='RandomFlip3D',
-    #     sync_2d=False,
-    #     flip_ratio_bev_horizontal=0.5,
-    #     flip_ratio_bev_vertical=0.5),
+    dict( # FIXME how to deal with the feture wrapper
+        type='GlobalRotScaleTrans',
+        rot_range=[-0.3925, 0.3925],
+        scale_ratio_range=[0.95, 1.05],
+        translation_std=[0, 0, 0]),
+    dict(
+        type='RandomFlip3D',
+        sync_2d=False,
+        flip_ratio_bev_horizontal=0.5,
+        flip_ratio_bev_vertical=0.5),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
     dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
     dict(type='ObjectNameFilterV2X', classes=classes),
-    dict(type='ObjectTrackIDFilterV2X', ids=[-100, -1]), # ego
+    dict(type='ObjectValidIDFilterV2X', ids=[-100, -1], impl=False),
     dict(type='PointShuffle'),
     dict(
         type='Pack3DDetInputsV2X',
-        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id'])
+        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id']
+        # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id']
+    ),
+]
+
+train_scene_pipline = [
+    dict(type='GatherV2XPoseInfo'),
+    # dict(type=''),
+    dict(
+        type='ImportanceFilter',
+        pc_range = det_range,
+        voxel_size = voxel_size,
+        ego_id = -100,
+        ego_name = 'ego_vehicle',
+        only_vehicle = False,
+        vehicle_id_list = [0, 1, 2],
+        ignore_thres = 0.5,
+        interrrupt_thres = 10,
+        visualize = None,
+        # visualize = './gt.png',
+    ),
+    dict(type='RemoveHistoryLabels'),
+    dict(type='RemoveFutureLabels'),
+    dict(type='PackSceneInfo'),
+    dict(type='DropSceneKeys',keys=('seq',)),
 ]
 
 train_dataloader = dict(
@@ -93,11 +120,13 @@ train_dataloader = dict(
           shuffle=True),
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
-        ann_file = val_annfile_path, # TODO
+        ann_file = train_annfile_path, # FIXME
+        # ann_file = val_annfile_path, # FIXME
         pipeline = train_pipline,
         modality = dict(use_lidar=True, use_camera=False),
         box_type_3d = 'LiDAR',
         load_type = 'frame_based',
+        key_interval = key_interval,
         seq_length = seq_length,
         present_idx = present_idx,
         co_agents = co_agents,
@@ -105,8 +134,7 @@ train_dataloader = dict(
         test_mode = False,
         with_velocity = det_with_velocity,
         adeptive_seq_length = True,
-        scene_pipline = [dict(type='PackSceneInfo'),
-                         dict(type='DropSceneKeys',keys=('seq',)),],
+        scene_pipline = train_scene_pipline,
     ),
 )
 
@@ -169,7 +197,7 @@ model = dict(
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
-            type='CenterHead',
+            type='CenterHeadModified',
             in_channels=sum([128, 128, 128]),
             tasks=det_tasks,
             bbox_coder=dict(
@@ -189,11 +217,11 @@ model = dict(
                 type='SeparateHead', init_bias=-2.19, final_kernel=3),
             share_conv_channel=64,
             num_heatmap_convs=2,
-            norm_bbox=True
+            norm_bbox=True,
+            with_velocity=det_with_velocity, # Modified
         ),
     ),
     pts_train_cfg=dict(
-        grid_size=grid_size,
         voxel_size=voxel_size,
         point_cloud_range=lidar_range,
         out_size_factor=det_out_factor,
@@ -201,7 +229,8 @@ model = dict(
         gaussian_overlap=0.1,
         max_objs=500,
         min_radius=2,
-        code_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+        code_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2],
+        gather_task_loss=True,
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
@@ -322,4 +351,4 @@ visualizer=dict(
 #       or not by default.
 #   - `base_batch_size` = (8 GPUs) x (4 samples per GPU).
 
-# auto_scale_lr = dict(enable=False, base_batch_size=32)
+# auto_scale_lr = dict(enable=True, base_batch_size=2)

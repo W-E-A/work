@@ -19,4 +19,4 @@ parse_args() {
 parse_args "$@"
 
 # 执行bash脚本，转发所有位置参数
-bash tools/dist_train_v2x.sh $@
+bash /ai/volume/work/tools/dist_train_v2x.sh $@

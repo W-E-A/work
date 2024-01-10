@@ -2,7 +2,7 @@ from typing import Optional, Union, Dict, Tuple, Sequence, List
 from mmdet3d.registry import MODELS
 from mmengine.model import BaseModule, Sequential
 from mmcv.cnn import ConvModule
-from ..utils.warper import FeatureWarper
+# from ..utils.warper import FeatureWarper
 import torch
 import torch.nn as nn
 
