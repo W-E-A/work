@@ -24,13 +24,11 @@ out_factor = 4
 det_out_factor = 4
 motion_out_factor = 4
 
-# seq_length = 100
-seq_length = 1
-present_idx = 0
-key_interval = 1
-co_agents = ('ego_vehicle', 'infrastructure')
-# co_agents = ('ego_vehicle',)
-det_with_velocity = True
+det_with_velocity = False
+# code_size = 9
+code_size = 7
+# code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 det_tasks = [
     dict(num_class=1, class_names=['car']),
     dict(num_class=1, class_names=['van']),
@@ -44,12 +42,29 @@ det_common_heads = dict(
     height=(1, 2),
     dim=(3, 2),
     rot=(2, 2),
-    vel=(2, 2)
+    # vel=(2, 2)
 )
 
-train_batch_size = 1
+train_batch_size = 3
 # train_batch_size = 2
-train_num_workers = 1
+train_num_workers = 30
+# train_seq_length = 100
+train_seq_length = 6
+train_present_idx = 0
+train_key_interval = 1
+train_co_agents = ('ego_vehicle', 'infrastructure')
+# train_co_agents = ('ego_vehicle',)
+
+
+test_batch_size = 8
+# test_batch_size = 2
+test_num_workers = 8
+# test_seq_length = 100
+test_seq_length = 1
+test_present_idx = 0
+test_key_interval = 1
+test_co_agents = ('ego_vehicle', 'infrastructure')
+# test_co_agents = ('ego_vehicle',)
 
 train_pipline = [
     dict(
@@ -66,20 +81,59 @@ train_pipline = [
         ),
     dict(type='ConstructEGOBox'),
     # dict(type='ObjectSample', db_sampler=db_sampler),
-    dict( # FIXME how to deal with the feture wrapper
-        type='GlobalRotScaleTrans',
-        rot_range=[-0.3925, 0.3925],
-        scale_ratio_range=[0.95, 1.05],
-        translation_std=[0, 0, 0]),
-    dict(
-        type='RandomFlip3D',
-        sync_2d=False,
-        flip_ratio_bev_horizontal=0.5,
-        flip_ratio_bev_vertical=0.5),
+    # dict( # FIXME how to deal with the feture wrapper
+    #     type='GlobalRotScaleTrans',
+    #     rot_range=[-0.3925, 0.3925],
+    #     scale_ratio_range=[0.95, 1.05],
+    #     translation_std=[0, 0, 0]),
+    # dict(
+    #     type='RandomFlip3D',
+    #     sync_2d=False,
+    #     flip_ratio_bev_horizontal=0.5,
+    #     flip_ratio_bev_vertical=0.5),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
     dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
     dict(type='ObjectNameFilterV2X', classes=classes),
-    dict(type='ObjectValidIDFilterV2X', ids=[-100, -1], impl=False),
+    dict(type='ObjectTrackIDFilter', ids=[-1, ], impl=True),
+    dict(type='ObjectValidFilter', impl=False), # False when cooperative perception
+    dict(type='PointShuffle'),
+    dict(
+        type='Pack3DDetInputsV2X',
+        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id']
+        # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id']
+    ),
+]
+
+test_pipline = [
+    dict(
+        type='LoadPointsNPZ',
+        coord_type='LIDAR',
+        load_dim=4,
+        use_dim=4,),
+    dict(
+        type='LoadAnnotations3DV2X',
+        with_bbox_3d=True,
+        with_label_3d=True,
+        with_bbox_3d_isvalid=True,
+        with_track_id=True,
+        ),
+    # dict(type='ConstructEGOBox'),
+    # dict(type='ObjectSample', db_sampler=db_sampler),
+    # dict( # FIXME how to deal with the feture wrapper
+    #     type='GlobalRotScaleTrans',
+    #     rot_range=[-0.3925, 0.3925],
+    #     scale_ratio_range=[0.95, 1.05],
+    #     translation_std=[0, 0, 0]),
+    # dict(
+    #     type='RandomFlip3D',
+    #     sync_2d=False,
+    #     flip_ratio_bev_horizontal=0.5,
+    #     flip_ratio_bev_vertical=0.5),
+    dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
+    dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
+    dict(type='ObjectNameFilterV2X', classes=classes),
+    dict(type='ObjectTrackIDFilter', ids=[-1, ], impl=True),
+    dict(type='ObjectValidFilter', impl=False), # False when cooperative perception
     dict(type='PointShuffle'),
     dict(
         type='Pack3DDetInputsV2X',
@@ -104,8 +158,32 @@ train_scene_pipline = [
         visualize = None,
         # visualize = './gt.png',
     ),
+    dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
+    dict(type='PackSceneInfo'),
+    dict(type='DropSceneKeys',keys=('seq',)),
+]
+
+test_scene_pipline = [
+    dict(type='GatherV2XPoseInfo'),
+    # dict(type=''),
+    # dict(
+    #     type='ImportanceFilter',
+    #     pc_range = det_range,
+    #     voxel_size = voxel_size,
+    #     ego_id = -100,
+    #     ego_name = 'ego_vehicle',
+    #     only_vehicle = False,
+    #     vehicle_id_list = [0, 1, 2],
+    #     ignore_thres = 0.5,
+    #     interrrupt_thres = 10,
+    #     visualize = None,
+    #     # visualize = './gt.png',
+    # ),
+    dict(type='DestoryEGOBox', ego_id = -100),
+    # dict(type='RemoveHistoryLabels'),
+    # dict(type='RemoveFutureLabels'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq',)),
 ]
@@ -126,16 +204,50 @@ train_dataloader = dict(
         modality = dict(use_lidar=True, use_camera=False),
         box_type_3d = 'LiDAR',
         load_type = 'frame_based',
-        key_interval = key_interval,
-        seq_length = seq_length,
-        present_idx = present_idx,
-        co_agents = co_agents,
+        key_interval = train_key_interval,
+        seq_length = train_seq_length,
+        present_idx = train_present_idx,
+        co_agents = train_co_agents,
         filter_empty_gt = True,
         test_mode = False,
         with_velocity = det_with_velocity,
         adeptive_seq_length = True,
         scene_pipline = train_scene_pipline,
     ),
+)
+
+test_dataloader = dict(
+    batch_size=test_batch_size,
+    num_workers=test_num_workers,
+    pin_memory=True,
+    drop_last=False,
+    sampler=dict(
+          type='DefaultSampler',
+          shuffle=False),
+    dataset=dict(
+        type = 'DeepAccident_V2X_Dataset',
+        ann_file = val_annfile_path,
+        pipeline = test_pipline,
+        modality = dict(use_lidar=True, use_camera=False),
+        box_type_3d = 'LiDAR',
+        load_type = 'frame_based',
+        key_interval = test_key_interval,
+        seq_length = test_seq_length,
+        present_idx = test_present_idx,
+        co_agents = test_co_agents,
+        filter_empty_gt = True,
+        test_mode = True,
+        with_velocity = det_with_velocity,
+        adeptive_seq_length = True,
+        scene_pipline = test_scene_pipline,
+    ),
+)
+
+test_evaluator = dict(
+    type='KittiMetricModified',
+    metric=['iou_mAP',],
+    with_velocity=False,
+
 )
 
 model = dict(
@@ -208,13 +320,16 @@ model = dict(
                 out_size_factor=det_out_factor,
                 voxel_size=voxel_size[:2],
                 pc_range=lidar_range[:2],
-                code_size=9),
+                code_size=code_size),
             common_heads=det_common_heads,
             loss_cls=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
-            loss_bbox=dict(
-                type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
+            loss_bbox=dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
             separate_head=dict(
-                type='SeparateHead', init_bias=-2.19, final_kernel=3),
+                type='SeparateHead',
+                head_conv=64,
+                init_bias=-2.19,
+                final_kernel=3
+            ),
             share_conv_channel=64,
             num_heatmap_convs=2,
             norm_bbox=True,
@@ -227,9 +342,10 @@ model = dict(
         out_size_factor=det_out_factor,
         dense_reg=1,
         gaussian_overlap=0.1,
+        rela_gaussian_overlap=0.1,
         max_objs=500,
         min_radius=2,
-        code_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2],
+        code_weights=code_weights,
         gather_task_loss=True,
     ),
     pts_test_cfg=dict(
@@ -248,6 +364,13 @@ model = dict(
     ),
 )
 
+lr = 1e-4
+gpus = 6
+checkpoint_interval = 2
+
+log_level = 'INFO'
+load_from = None
+resume = False
 
 default_scope = 'mmdet3d'
 
@@ -257,7 +380,7 @@ default_hooks = dict(
                 sampler_seed=dict(type='DistSamplerSeedHook'),
                 logger=dict(type='LoggerHook', interval=1),
                 param_scheduler=dict(type='ParamSchedulerHook'),
-                checkpoint=dict(type='CheckpointHook', interval=-1),
+                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
 
 env_cfg = dict(
@@ -270,12 +393,6 @@ log_processor = dict(
     window_size=10,
     by_epoch=True,
 )
-
-log_level = 'INFO'
-load_from = None
-resume = False
-
-lr = 1e-4
 
 optim_wrapper = dict(
     type='OptimWrapper',
@@ -330,25 +447,28 @@ train_cfg = dict(
     # val_interval=1
 )
 # val_cfg = dict(type='ValLoop')
-# test_cfg = dict(type='TestLoop')
+test_cfg = dict(type='TestLoop')
 
-visualizer=dict(
-    type='Visualizer',
-    # name='comm_vis',
-    vis_backends=[
-        # dict(type='LocalVisBackend'),
-        dict(type='TensorboardVisBackend'),
-    ],
-    # save_dir='comm_mask'
-)
+# visualizer=dict(
+#     type='Visualizer',
+#     # name='comm_vis',
+#     vis_backends=[
+#         # dict(type='LocalVisBackend'),
+#         dict(type='TensorboardVisBackend'),
+#     ],
+#     # save_dir='comm_mask'
+# )
 
-# vis_backends = [dict(type='LocalVisBackend')]
-# visualizer = dict(
-#     type='Det3DLocalVisualizer', vis_backends=vis_backends, name='visualizer')
+vis_backends = [dict(type='LocalVisBackend')]
+visualizer = dict(
+    type='Det3DLocalVisualizer', vis_backends=vis_backends, name='visualizer')
 
 # Default setting for scaling LR automatically
 #   - `enable` means enable scaling LR automatically
 #       or not by default.
 #   - `base_batch_size` = (8 GPUs) x (4 samples per GPU).
 
-# auto_scale_lr = dict(enable=True, base_batch_size=2)
+auto_scale_lr = dict(enable=True, base_batch_size=train_batch_size * gpus)
+
+# dist
+find_unused_parameters = True

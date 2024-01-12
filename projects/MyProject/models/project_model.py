@@ -10,9 +10,9 @@ import numpy as np
 from mmdet3d.models.utils import (clip_sigmoid, draw_heatmap_gaussian, gaussian_radius)
 from mmdet3d.models.layers import circle_nms
 from ..utils import calc_relative_pose, simple_points_project
-# import cv2
-# from mmengine.registry import MODEL_WRAPPERS
-# from torch.nn.parallel import DistributedDataParallel
+from itertools import chain
+import copy
+from mmdet3d.structures import Det3DDataSample
 
 @MODELS.register_module()
 class ProjectModel(MVXTwoStageDetector):
@@ -167,10 +167,6 @@ class ProjectModel(MVXTwoStageDetector):
         (None, Instance)
 
         """
-        # import pdb
-        # pdb.set_trace()
-        # return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-
         sample_idx = scene_info[0].sample_idx
         scene_name = scene_info[0].scene_name
         scene_timestamps = scene_info[0].scene_timestamps
@@ -182,26 +178,34 @@ class ProjectModel(MVXTwoStageDetector):
         seq_length = scene_info[0].seq_length
         batch_size = len(scene_info)
 
+        ################################ DEBUG ################################
+        # scene_info[0]['pose_matrix'] = []
+        # scene_info[0]['motion_matrix'] = []
+        # print(scene_info[0])
+        # import pdb
+        # pdb.set_trace()
+        # return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        ################################ DEBUG ################################
+
+
         # if self.pts_train_cfg.get('visualize', False) and self.pts_train_cfg.get('vis_cfg', None) and mode == 'loss': # type: ignore
         #     self.train_visualize(scene_info, example_seq)
         #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-
-        # if mode == 'loss':
-        #     scene_loss = [ [ {} for j in range(co_length)] for i in range(seq_length)] # task list of loss dict
-        # elif mode == 'predict':
-        #     scene_ret = [ [ [] for j in range(co_length)] for i in range(seq_length)] # task list of ret dict
 
         # 0, 1, 2, ..., n so first[0] will be the earliest history, last[-1] is the future feature
         # Note that the entire sequence contains all frames from history, present, and future
         # so history + furure(including the present) = seq_length
 
-        # only present inputs and labels matter
 
+        # only present inputs and labels matter
         agent_features = []
+        agent_batch_samples = []
         for j, agnet in enumerate(co_agents):
             present_example_seq = example_seq[present_idx][j]
             present_batch_input_dict = present_example_seq['inputs']
-            present_batch_input_meta = [present_example_seq[b].metainfo for b in range(batch_size)]
+            present_batch_input_meta = [present_example_seq['data_samples'][b].metainfo for b in range(batch_size)]
+
+            agent_batch_samples.extend(present_example_seq['data_samples']) # A*B DSP
 
             pts_feat_dict = self.extract_feat(present_batch_input_dict,
                                                 present_batch_input_meta,
@@ -215,39 +219,133 @@ class ProjectModel(MVXTwoStageDetector):
         A, B, C, H, W = agent_features.shape
         agent_features = agent_features.view(A*B, C, H, W)
 
+        ################################ SHOW ORIGINAL PILLAR SCATTER ################################
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots(1, 1)
+        # assert batch_size == 1
+
+        # infra_feat = agent_features[1, ...].permute(1, 2, 0)
+        # img = torch.sigmoid(torch.mean(infra_feat, dim=-1)).detach().cpu().numpy()
+        # ax.imshow(img)
+        # fig.savefig('./feat.png', dpi=300)
+        
+        # import pdb
+        # pdb.set_trace()
+        # return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        ################################ SHOW ORIGINAL PILLAR SCATTER ################################
+
         backbone_features = self.pts_backbone(agent_features) # A*B C H W
         neck_features = self.pts_neck(backbone_features) # list A*B C H W
              
-        head_feat_dict = self.multi_task_head(neck_features)
+        head_feat_dict = self.multi_task_head(neck_features) # out from dethead and motionhead
 
         if mode == 'loss':
             loss_dict = {}
+            all_visible_instances = []
+            temp_samples = copy.deepcopy(agent_batch_samples)
+            for samples in temp_samples:
+                valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+                all_visible_instances.append(samples.gt_instances_3d[valid_mask]) # A*B visible
+
+            if self.with_det_head:
+                heatmaps, anno_boxes, inds, masks, relamaps = self.multi_task_head.det_head.get_targets(all_visible_instances) # A*B
+                # T * [A*B C H W] T * [A*B M 8/10] T * [A*B M] T * [A*B M]
+                relamaps = torch.stack(relamaps, dim=0).permute(1, 0, 2, 3, 4).contiguous() # T A*B C H W -> A*B T C H W
+                AB, T, C, H, W = relamaps.shape
+                relamaps = relamaps.view(AB, T*C, H, W)
+                relamaps = torch.max(relamaps, dim=1, keepdim=True).values # AB 1 H W
+                relamasks = torch.where(
+                    relamaps > 1e-8,
+                    torch.ones_like(relamaps, device=get_device()),
+                    torch.zeros_like(relamaps, device=get_device()),
+                ) # AB 1 H W
+
+                ################################ SHOW RELA(COMM) MASK ################################
+                # import matplotlib.pyplot as plt
+                # fig, (ax1, ax2) = plt.subplots(1, 2)
+                # assert batch_size == 1
+
+                # relamasks = relamasks.permute(0, 2, 3, 1)
+                # ego_mask = relamasks[0].cpu().numpy().squeeze(-1)
+                # infra_mask = relamasks[1].cpu().numpy().squeeze(-1)
+                # ax1.imshow(ego_mask)
+                # ax2.imshow(infra_mask)
+                # fig.savefig('./mask.png', dpi=300)
+
+                # import pdb
+                # pdb.set_trace()
+                # return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                ################################ SHOW RELA(COMM) MASK ################################
+
+                single_det_gt = {
+                    'heatmaps':heatmaps,
+                    'anno_boxes':anno_boxes,
+                    'inds':inds,
+                    'masks':masks,
+                }
+
+                loss_dict = self.multi_task_head.loss(head_feat_dict,
+                                                    det_gt = single_det_gt,
+                                                    motion_gt = None,
+                                                    gather_task_loss = self.gather_task_loss)
+
+
+                # comm_features = neck_features[0] * relamasks # A*B C H W * A*B 1 H W
+                # _, C, H, W = comm_features.shape
+                # # FIXME we assume 0 position will always be ego
+                # agent_comm_features = comm_features.view(A, B, C, H, W)[1:] # A-1 B C H W
+
+                # FIXME
+                # FIXME 基于所有可视的GT， 对于EGO来说， 需要：协同代理可视GT -> 位姿变换，id筛选，拼接到EGO的感知范围 （多）（融合后监督）OLD!
+                # FIXME 基于所有可视的GT， 对于EGO来说， 需要：策略筛选的GT -> 位姿变换，id筛选，拼接到EGO的感知范围 （少）（融合后监督）NEW!
+                # FIXME
+                # FIXME wrap the feature
+                # FIXME into fusion layer
+                # FIXME 获取协同标签
+                # FIXME 进行协同监督
             
-            batch_data_instances = [samples.gt_instances_3d for samples in total_batch_samples]
-            loss_dict = self.multi_task_head.loss(head_feat_dict,
-                                                batch_det_instances = batch_data_instances,
-                                            #   batch_motion_instances = batch_single_instances_motion,
-                                                batch_motion_instances = None,
-                                                gather_task_loss = self.gather_task_loss)
-            # scene_loss[i][j] = loss_dict # type: ignore
             return loss_dict
 
-        elif mode == 'predict':
-            total_batch_input_metas = [samples.metainfo for samples in total_batch_samples]
-            predict_dict = self.multi_task_head.predict(head_feat_dict, total_batch_input_metas)
+        if mode == 'predict':
+            temp_samples = copy.deepcopy(agent_batch_samples)
+            present_batch_input_metas = [samples.metainfo for samples in temp_samples] # A*B
+            predict_dict = self.multi_task_head.predict(head_feat_dict, present_batch_input_metas)
             if 'det_pred' in predict_dict:
-                total_batch_samples = self.add_pred_to_datasample(total_batch_samples,
-                                                                  predict_dict['det_pred'],
-                                                                  None)
+                result_list = predict_dict['det_pred'] # add to pred_instances_3d from None to instance of bboxes_3d scores_3d labels_3d
+                ret_list = []
+                for j, agent in enumerate(co_agents):
+                    agent_pred_result = result_list[ j*batch_size : (j+1)*batch_size ]
+                    agent_sample = temp_samples[ j*batch_size : (j+1)*batch_size ]
+                    result_sample = []
+                    for b in range(batch_size):
+                        sample = Det3DDataSample()
+                        sample.set_metainfo(
+                            dict(
+                                scene_sample_idx = scene_info[b].sample_idx,
+                                scene_name = scene_info[b].scene_name,
+                                agent_name = agent,
+                                sample_idx = agent_sample[b].metainfo['sample_idx'], # type: ignore
+                                box_type_3d = agent_sample[b].metainfo['box_type_3d'], # type: ignore
+                            )
+                        )
+                        sample.gt_instances_3d = agent_sample[b].gt_instances_3d
+                        valid_mask = sample.gt_instances_3d.bbox_3d_isvalid
+                        sample.gt_instances_3d = sample.gt_instances_3d[valid_mask]
+                        sample.gt_instances_3d.pop('track_id')
+                        sample.gt_instances_3d.pop('bbox_3d_isvalid')
+                        sample.pred_instances_3d = agent_pred_result[b]
+                        result_sample.append(sample)
+                    ret_list.extend(result_sample)
+
             # if 'motion_pred' in predict_dict:
             #     pass FIXME
 
-            return total_batch_samples
+            return ret_list # type: ignore
         
         else:
             raise RuntimeError(f'Invalid mode "{mode}". '
                                'Only supports loss, predict and tensor mode')
-        
+    
     # def train_visualize(self,
     #             scene_info: Sequence,
     #             example_seq: Sequence) -> None:

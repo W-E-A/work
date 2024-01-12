@@ -3,8 +3,8 @@ cd "/ai/volume/work"
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate mm
 
-CONFIG=projects/MyProject/configs/exp1_dist.py
-GPUS=1
+CONFIG=projects/MyProject/configs/exp1.py
+GPUS=6
 NNODES=${NNODES:-1}
 NODE_RANK=${NODE_RANK:-0}
 PORT=${PORT:-29500}
