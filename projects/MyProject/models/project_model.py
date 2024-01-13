@@ -12,7 +12,9 @@ from mmdet3d.models.layers import circle_nms
 from ..utils import calc_relative_pose, simple_points_project
 from itertools import chain
 import copy
-from mmdet3d.structures import Det3DDataSample
+from mmdet3d.structures import Det3DDataSample, LiDARInstance3DBoxes
+from mmdet3d.structures.bbox_3d import Box3DMode
+from mmdet3d.visualization import Det3DLocalVisualizer
 
 @MODELS.register_module()
 class ProjectModel(MVXTwoStageDetector):
@@ -326,6 +328,8 @@ class ProjectModel(MVXTwoStageDetector):
                                 agent_name = agent,
                                 sample_idx = agent_sample[b].metainfo['sample_idx'], # type: ignore
                                 box_type_3d = agent_sample[b].metainfo['box_type_3d'], # type: ignore
+                                lidar_path = agent_sample[b].metainfo['lidar_path'], # type: ignore
+                                num_pts_feats = agent_sample[b].metainfo['num_pts_feats'], # type: ignore
                             )
                         )
                         sample.gt_instances_3d = agent_sample[b].gt_instances_3d
@@ -336,6 +340,36 @@ class ProjectModel(MVXTwoStageDetector):
                         sample.pred_instances_3d = agent_pred_result[b]
                         result_sample.append(sample)
                     ret_list.extend(result_sample)
+
+                self.visualizer: Det3DLocalVisualizer = Det3DLocalVisualizer.get_current_instance()
+                for result in ret_list:
+                    gt_bboxes_3d: LiDARInstance3DBoxes = result.gt_instances_3d.bboxes_3d
+                    gt_bboxes_3d = gt_bboxes_3d.convert_to(Box3DMode.CAM) # type: ignore
+                    # self.visualizer.set_bev_image()
+                    bev_image = np.zeros((1024, 1024, 3), np.uint8)
+                    self.visualizer._image = bev_image
+                    self.visualizer.width, self.visualizer.height = bev_image.shape[1], bev_image.shape[0]
+                    self.visualizer._default_font_size = max(
+                        np.sqrt(self.visualizer.height * self.visualizer.width) // 90, 10
+                    )
+                    self.visualizer.ax_save.cla()
+                    self.visualizer.ax_save.axis(False)
+                    self.visualizer.ax_save.imshow(bev_image)
+                    self.visualizer.ax_save.plot(
+                        self.visualizer.width / 2,
+                        self.visualizer.height / 2,
+                        marker='+',
+                        markersize=16,
+                        markeredgecolor='red'
+                    )
+                    self.visualizer.draw_bev_bboxes(gt_bboxes_3d, edge_colors='orange')
+                    self.visualizer.fig_save.savefig('./bev_box.png', dpi=200) # type: ignore
+                    import pdb
+                    pdb.set_trace()
+
+                import pdb
+                pdb.set_trace()
+
 
             # if 'motion_pred' in predict_dict:
             #     pass FIXME

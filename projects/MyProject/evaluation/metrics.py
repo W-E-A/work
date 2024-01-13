@@ -60,9 +60,9 @@ class KittiMetricModified(BaseMetric):
                 gt_3d[attr_name] = gt_3d[attr_name].to('cpu')
             result['gt_instances_3d'] = gt_3d
 
-            result['scene_sample_idx'] = data_sample['scene_sample_idx']
-            result['scene_name'] = data_sample['scene_name']
-            result['agent_name'] = data_sample['agent_name']
+            # result['scene_sample_idx'] = data_sample['scene_sample_idx']
+            # result['scene_name'] = data_sample['scene_name']
+            # result['agent_name'] = data_sample['agent_name']
             result['sample_idx'] = data_sample['sample_idx']
             result['box_type_3d'] = data_sample['box_type_3d']
 

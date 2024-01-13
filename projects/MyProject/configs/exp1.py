@@ -56,15 +56,15 @@ train_co_agents = ('ego_vehicle', 'infrastructure')
 # train_co_agents = ('ego_vehicle',)
 
 
-test_batch_size = 8
+test_batch_size = 10
 # test_batch_size = 2
 test_num_workers = 8
 # test_seq_length = 100
 test_seq_length = 1
 test_present_idx = 0
 test_key_interval = 1
-test_co_agents = ('ego_vehicle', 'infrastructure')
-# test_co_agents = ('ego_vehicle',)
+# test_co_agents = ('ego_vehicle', 'infrastructure')
+test_co_agents = ('ego_vehicle',)
 
 train_pipline = [
     dict(
@@ -459,7 +459,8 @@ test_cfg = dict(type='TestLoop')
 #     # save_dir='comm_mask'
 # )
 
-vis_backends = [dict(type='LocalVisBackend')]
+# vis_backends = [dict(type='LocalVisBackend'), dict(type='TensorboardVisBackend'),]
+vis_backends = [dict(type='LocalVisBackend'), ]
 visualizer = dict(
     type='Det3DLocalVisualizer', vis_backends=vis_backends, name='visualizer')
 
