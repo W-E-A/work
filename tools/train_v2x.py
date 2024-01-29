@@ -15,6 +15,10 @@ def parse_args():
                         type=str,
                         default=None,
                         help='the dir to save logs and models')
+    parser.add_argument('--checkpoint',
+                        type=str,
+                        default=None,
+                        help='load pre-trained weight')
     parser.add_argument(
         '--amp',
         action='store_true',
@@ -72,6 +76,9 @@ def main():
         # use config filename as default work_dir if cfg.work_dir is None
         cfg.work_dir = osp.join('./work_dirs',
                                 osp.splitext(osp.basename(args.config))[0])
+    
+    if not args.resume:
+        cfg.load_from = args.checkpoint
 
     # enable automatic-mixed-precision training
     if args.amp is True:

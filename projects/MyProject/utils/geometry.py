@@ -1,8 +1,10 @@
 import numpy as np
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 from mmdet3d.utils import array_converter
 from typing import Tuple, Union, List, Sequence
+
 
 @array_converter(apply_to=('points', 'extrinsic'))
 def simple_points_project(
@@ -29,6 +31,7 @@ def simple_points_project(
         result = result_xyz
     return result
 
+
 def calc_relative_pose(
     left: Union[np.ndarray, Tensor],
     right: Union[np.ndarray, Tensor, List[Union[np.ndarray, Tensor]]],
@@ -45,6 +48,7 @@ def calc_relative_pose(
     else:
         result = left_inv @ right
     return result
+
 
 @array_converter(apply_to=('matrix',))
 def mat2vec(matrix: Union[np.ndarray, Tensor]):
@@ -74,7 +78,8 @@ def mat2vec(matrix: Union[np.ndarray, Tensor]):
     return torch.cat((translation, rotation), dim=-1) # type: ignore
 
 
-def euler2mat(angle: torch.Tensor):
+@array_converter(apply_to=('angle',))
+def euler2mat(angle: Union[np.ndarray, Tensor]):
     """Convert euler angles to rotation matrix.
     Reference: https://github.com/pulkitag/pycaffe-utils/blob/master/rot_utils.py#L174
     Args:
@@ -83,7 +88,7 @@ def euler2mat(angle: torch.Tensor):
         Rotation matrix corresponding to the euler angles [Bx3x3]
     """
     shape = angle.shape
-    angle = angle.view(-1, 3)
+    angle = angle.view(-1, 3) # type: ignore
     x, y, z = angle[:, 0], angle[:, 1], angle[:, 2]
 
     cosz = torch.cos(z)
@@ -111,7 +116,8 @@ def euler2mat(angle: torch.Tensor):
     return rot_mat
 
 
-def pose_vec2mat(vec: torch.Tensor):
+@array_converter(apply_to=('vec',))
+def vec2mat(vec: Union[np.ndarray, Tensor]):
     """
     Convert 6DoF parameters to transformation matrix.
     Args:
@@ -119,6 +125,7 @@ def pose_vec2mat(vec: torch.Tensor):
     Returns:
         A transformation matrix [B,4,4]
     """
+    # vec N 6
     translation = vec[..., :3].unsqueeze(-1)  # [...x3x1]
     rot = vec[..., 3:].contiguous()  # [...x3]
     rot_mat = euler2mat(rot)  # [...,3,3]
@@ -129,6 +136,7 @@ def pose_vec2mat(vec: torch.Tensor):
     return transform_mat
 
 
+@array_converter(apply_to=('x',))
 def invert_pose_matrix(x):
     """
     Parameters
@@ -154,126 +162,110 @@ def invert_pose_matrix(x):
     return inverse_mat
 
 
-def warp_features(x, flow, mode='nearest', spatial_extent=None):
+@array_converter(apply_to=('x', 'flow', ))
+def warp_features(
+    x: Union[np.ndarray, Tensor],
+    flow: Union[np.ndarray, Tensor],
+    spatial_extent: Tuple[float, float],
+    mode: str = 'nearest',
+):
     """ Applies a rotation and translation to feature map x.
-        Args:
-            x: (b, c, h, w) feature map
-            flow: (b, 6) 6DoF vector (only uses the xy poriton)
-            mode: use 'nearest' when dealing with categorical inputs
-        Returns:
-            in plane transformed feature map
-        """
-    if flow is None:
-        return x
-    b, c, h, w = x.shape
-    # z-rotation
-    angle = - flow[:, 5].clone()  # torch.atan2(flow[:, 1, 0], flow[:, 0, 0])
-    # x-y translation
-    translation = flow[:, :2].clone()  # flow[:, :2, 3]
+    Args:
+        x: (b, c, h, w) feature map
+        flow: (b, 6) 6DoF vector (only uses the xy poriton)
+        mode: use 'nearest' when dealing with categorical inputs
+    Returns:
+        in plane transformed feature map
+    """
+    dtype = x.dtype
+    device = x.device # type: ignore
+    if flow.shape[-1] == 6:
+        flow = vec2mat(flow) # B 4 4
+    transformation = flow[:, :2, [0, 1, 3]].to(dtype).to(device) # type: ignore
+    transformation[:, 0, 2] /= spatial_extent[0] # B 2 3
+    transformation[:, 1, 2] /= spatial_extent[1] # B 2 3
 
-    # Normalise translation. Need to divide by how many meters is half of the image.
-    # because translation of 1.0 correspond to translation of half of the image.
-    translation[:, 0] /= spatial_extent[0]
-    translation[:, 1] /= spatial_extent[1]
-
-    cos_theta = torch.cos(angle)
-    sin_theta = torch.sin(angle)
-
-    # output = Rot.input + translation
-    # tx and ty are inverted as is the case when going from real coordinates to numpy coordinates
-    # translation_pos_0 -> positive value makes the image move to the left
-    # translation_pos_1 -> positive value makes the image move to the top
-    # Angle -> positive value in rad makes the image move in the trigonometric way
-    # transformation = torch.stack([cos_theta, -sin_theta, translation[:, 1],
-    #                               sin_theta, cos_theta, translation[:, 0]], dim=-1).view(b, 2, 3)
-
-    transformation = torch.stack([cos_theta, -sin_theta, translation[:, 0],
-                                  sin_theta, cos_theta, -translation[:, 1]], dim=-1).view(b, 2, 3)
-
-    # bev_flow = flow.clone()
-    # bev_flow[:, 2:5] = 0
-    # bev_flow[:, 0] /= spatial_extent[0]
-    # bev_flow[:, 1] /= spatial_extent[1]
-    # transform_3d = pose_vec2mat(bev_flow)
-    # transform_bev = transform_3d[:, :2][..., [0, 1, 3]]
-
-    # Note that a rotation will preserve distances only if height = width. Otherwise there's
-    # resizing going on. e.g. rotation of pi/2 of a 100x200 image will make what's in the center of the image
-    # elongated.
-
-    grid = torch.nn.functional.affine_grid(
-        transformation, size=x.shape, align_corners=True)
-    warped_x = torch.nn.functional.grid_sample(
-        x, grid.float(), mode=mode, padding_mode='zeros', align_corners=True)
+    grid = F.affine_grid(
+        transformation,
+        size=x.shape, # type: ignore
+        align_corners=True
+    )
+    warped_x = F.grid_sample(
+        x, # type: ignore
+        grid.float(),
+        mode=mode,
+        padding_mode='zeros',
+        align_corners=True
+    )
 
     return warped_x
 
 
-def cumulative_warp_features(x, flow, mode='nearest', spatial_extent=None):
-    """ Warps a sequence of feature maps by accumulating incremental 2d flow.
+# def cumulative_warp_features(x, flow, mode='nearest', spatial_extent=None):
+#     """ Warps a sequence of feature maps by accumulating incremental 2d flow.
 
-    x[:, -1] remains unchanged
-    x[:, -2] is warped using flow[:, -2]
-    x[:, -3] is warped using flow[:, -3] @ flow[:, -2]
-    ...
-    x[:, 0] is warped using flow[:, 0] @ ... @ flow[:, -3] @ flow[:, -2]
+#     x[:, -1] remains unchanged
+#     x[:, -2] is warped using flow[:, -2]
+#     x[:, -3] is warped using flow[:, -3] @ flow[:, -2]
+#     ...
+#     x[:, 0] is warped using flow[:, 0] @ ... @ flow[:, -3] @ flow[:, -2]
 
-    Args:
-        x: (b, t, c, h, w) sequence of feature maps
-        flow: (b, t, 6) sequence of 6 DoF pose
-            from t to t+1 (only uses the xy poriton)
+#     Args:
+#         x: (b, t, c, h, w) sequence of feature maps
+#         flow: (b, t, 6) sequence of 6 DoF pose
+#             from t to t+1 (only uses the xy poriton)
 
-    """
-    sequence_length = x.shape[1]
-    if sequence_length == 1:
-        return x
+#     """
+#     sequence_length = x.shape[1]
+#     if sequence_length == 1:
+#         return x
 
-    flow = pose_vec2mat(flow)
+#     flow = pose_vec2mat(flow)
 
-    out = [x[:, -1]]
-    cum_flow = flow[:, -2]
-    for t in reversed(range(sequence_length - 1)):
-        out.append(warp_features(x[:, t], mat2pose_vec(
-            cum_flow), mode=mode, spatial_extent=spatial_extent))
-        # @ is the equivalent of torch.bmm
-        cum_flow = flow[:, t - 1] @ cum_flow
+#     out = [x[:, -1]]
+#     cum_flow = flow[:, -2]
+#     for t in reversed(range(sequence_length - 1)):
+#         out.append(warp_features(x[:, t], mat2pose_vec(
+#             cum_flow), mode=mode, spatial_extent=spatial_extent))
+#         # @ is the equivalent of torch.bmm
+#         cum_flow = flow[:, t - 1] @ cum_flow
 
-    return torch.stack(out[::-1], 1)
+#     return torch.stack(out[::-1], 1)
 
 
-def cumulative_warp_features_reverse(x, flow, mode='nearest', spatial_extent=None, bev_transform=None):
-    """ Warps a sequence of feature maps by accumulating incremental 2d flow.
+# def cumulative_warp_features_reverse(x, flow, mode='nearest', spatial_extent=None, bev_transform=None):
+#     """ Warps a sequence of feature maps by accumulating incremental 2d flow.
 
-    x[:, 0] remains unchanged
-    x[:, 1] is warped using flow[:, 0].inverse()
-    x[:, 2] is warped using flow[:, 0].inverse() @ flow[:, 1].inverse()
-    ...
+#     x[:, 0] remains unchanged
+#     x[:, 1] is warped using flow[:, 0].inverse()
+#     x[:, 2] is warped using flow[:, 0].inverse() @ flow[:, 1].inverse()
+#     ...
 
-    Args:
-        x: (b, t, c, h, w) sequence of feature maps
-        flow: (b, t, 6) sequence of 6 DoF pose
-            from t to t+1 (only uses the xy poriton)
+#     Args:
+#         x: (b, t, c, h, w) sequence of feature maps
+#         flow: (b, t, 6) sequence of 6 DoF pose
+#             from t to t+1 (only uses the xy poriton)
 
-    """
+#     """
 
-    flow = pose_vec2mat(flow)
-    out = [x[:, 0]]
+#     flow = pose_vec2mat(flow)
+#     out = [x[:, 0]]
 
-    for i in range(1, x.shape[1]):
-        if i == 1:
-            cum_flow = invert_pose_matrix(flow[:, 0])
-        else:
-            cum_flow = cum_flow @ invert_pose_matrix(flow[:, i - 1])
+#     for i in range(1, x.shape[1]):
+#         if i == 1:
+#             cum_flow = invert_pose_matrix(flow[:, 0])
+#         else:
+#             cum_flow = cum_flow @ invert_pose_matrix(flow[:, i - 1])
 
-        # cum_flow only represents the ego_motion, while bev_transform needs extra processing
-        if bev_transform is not None:
-            # points 先做 inverse_bev_transform，再做 motion 变换，再做 bev_transform
-            # warp_flow = bev_transform @ cum_flow @ bev_transform.inverse()
-            warp_flow = bev_transform.inverse() @ cum_flow @ bev_transform
-        else:
-            warp_flow = cum_flow.clone()
+#         # cum_flow only represents the ego_motion, while bev_transform needs extra processing
+#         if bev_transform is not None:
+#             # points 先做 inverse_bev_transform，再做 motion 变换，再做 bev_transform
+#             # warp_flow = bev_transform @ cum_flow @ bev_transform.inverse()
+#             warp_flow = bev_transform.inverse() @ cum_flow @ bev_transform
+#         else:
+#             warp_flow = cum_flow.clone()
 
-        out.append(warp_features(x[:, i], mat2pose_vec(
-            warp_flow), mode, spatial_extent=spatial_extent))
+#         out.append(warp_features(x[:, i], mat2pose_vec(
+#             warp_flow), mode, spatial_extent=spatial_extent))
 
-    return torch.stack(out, 1)
+#     return torch.stack(out, 1)

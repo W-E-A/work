@@ -13,6 +13,7 @@ import torch
 import cv2
 from ..utils import calc_relative_pose, mat2vec
 import matplotlib.pyplot as plt
+import torch
 
 # NOTE add all ego motion 6 DOF
 # NOTE 把现在和未来的筛选放这里，intput 提供历史+当前输入，而data_samples提供未来+当前标签
@@ -42,6 +43,37 @@ class LoadPointsNPZ(LoadPointsFromFile):
         assert osp.exists(pts_filename) and pts_filename.endswith('.npz')
         pc = np.load(pts_filename)['data']
         return pc
+
+
+@TRANSFORMS.register_module()
+class InnerPointsRangeFilter(BaseTransform):
+    def __init__(self, point_cloud_range: List[float]) -> None:
+        self.pcd_range = np.array(point_cloud_range, dtype=np.float32)
+
+    def transform(self, input_dict: dict) -> dict:
+        points = input_dict['points']
+        points_mask = points.in_range_3d(self.pcd_range)
+        points_mask = torch.logical_not(points_mask)
+        clean_points = points[points_mask]
+        input_dict['points'] = clean_points
+        points_mask = points_mask.numpy()
+
+        pts_instance_mask = input_dict.get('pts_instance_mask', None)
+        pts_semantic_mask = input_dict.get('pts_semantic_mask', None)
+
+        if pts_instance_mask is not None:
+            input_dict['pts_instance_mask'] = pts_instance_mask[points_mask]
+
+        if pts_semantic_mask is not None:
+            input_dict['pts_semantic_mask'] = pts_semantic_mask[points_mask]
+
+        return input_dict
+
+    def __repr__(self) -> str:
+        """str: Return a string that describes the module."""
+        repr_str = self.__class__.__name__
+        repr_str += f'(point_cloud_range={self.pcd_range.tolist()})'
+        return repr_str
 
 
 @TRANSFORMS.register_module()
@@ -300,10 +332,20 @@ class Pack3DDetInputsV2X(Pack3DDetInputs):
 
 @TRANSFORMS.register_module()
 class GatherV2XPoseInfo(BaseTransform):
+    """
+    row ij j to i
+    col ji i to j
+
+    motion rela to seq start
+
+    more: motion rela to last frame FIXME
+    """
     def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
         co_length = input_dict['co_length']
         seq_length = input_dict['seq_length']
         example_seq = input_dict['example_seq']
+        present_idx = input_dict['present_idx']
+        future_seq = range(seq_length)[present_idx:] # only future motion
 
         seq_pose_matrix = []
         for i, data_info_list in enumerate(example_seq):
@@ -317,21 +359,28 @@ class GatherV2XPoseInfo(BaseTransform):
         seq_pose_matrix = np.stack(seq_pose_matrix, axis=0)
         input_dict['pose_matrix'] = seq_pose_matrix # seq, co, co, 4, 4
 
-        motion_matrix = []
+        future_motion_matrix = []
         for j in range(co_length):
-            motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in range(seq_length)]
-            base_motion = motion_list[0]
-            motion_matrix.append(np.stack(calc_relative_pose(base_motion, motion_list), axis=0)) # type: ignore
-        motion_matrix = np.stack(motion_matrix, axis=0) # NOTE ends with identity
-        input_dict['motion_matrix'] = motion_matrix # co seq 4 4 
+            future_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in future_seq]
+            future_motion_matrix.append(np.stack(calc_relative_pose(future_motion_list[0], future_motion_list), axis=0)) # type: ignore
+        future_motion_matrix = np.stack(future_motion_matrix, axis=0) # NOTE starts with identity
+        input_dict['future_motion_matrix'] = future_motion_matrix # co seq 4 4 
         # FIXME
         # FIXME NOT MOTION !
+        # FIXME MOTION must be 6 DOF rela (k-1)_k ...
         
         return input_dict
 
 
 @TRANSFORMS.register_module()
 class ConvertMotionLabels(BaseTransform):
+    """
+    FIXME
+    FIXME
+    FIXME
+    FIXME
+
+    """
     def __init__(self,
                  pc_range,
                  voxel_size,
@@ -508,7 +557,7 @@ class ImportanceFilter(BaseTransform):
         future_seq_timestamps = range(seq_length)[present_idx:]
         future_length = len(future_seq_timestamps)
         future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4
-        future_motion_matrix = input_dict['motion_matrix'][:, present_idx:] # c x 4 4
+        future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4
 
         co_agents = {v : k for k, v in enumerate(co_agents)}
 
@@ -517,11 +566,10 @@ class ImportanceFilter(BaseTransform):
         for agent, j in co_agents.items():
             if agent == self.ego_name:
                 ego_motion_matrix = future_motion_matrix[j] # x 4 4 rela to present
-                persent_trans_matrix = future_pose_matrix[0, :, j]
+                persent_trans_matrix = future_pose_matrix[0, :, j] # c 4 4
                 persent_trans_matrix = np.delete(persent_trans_matrix, j, axis=0) # ego to [ego, other, ...] at present c-1 4 4
             else:
                 track_map = {}
-                agent_motion_matrix = future_motion_matrix[j] # x 4 4 rela to present
                 for i, timestamp in enumerate(future_seq_timestamps):
                     gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
 
@@ -536,10 +584,10 @@ class ImportanceFilter(BaseTransform):
                     gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target
 
                     lidar2agent = np.array(example_seq[timestamp][j]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) # type: ignore
-                    agent2present = agent_motion_matrix[0]
+                    agent2present = future_motion_matrix[j][i]
                     lidar2present = lidar2agent @ agent2present
                     gt_instances_3d.bboxes_3d.rotate(lidar2present[:3, :3].T, None)
-                    gt_instances_3d.bboxes_3d.translate(lidar2present[:3, 3])
+                    gt_instances_3d.bboxes_3d.translate(lidar2present[:3, 3]) # valid boxes to present
                     
                     for idx, id in enumerate(gt_instances_3d.track_id):
                         bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # agent坐标系下其他目标的present的中心
@@ -561,7 +609,7 @@ class ImportanceFilter(BaseTransform):
             present_instances_3d = example_seq[present_idx][j]['data_samples'].gt_instances_3d
             trans = persent_trans_matrix[i] # type: ignore
             rela_matrix = np.stack([trans @ ego_motion_matrix[k] for k in range(future_length)], axis=0) # type: ignore
-            rela_centers = rela_matrix[:, :2, 3]
+            rela_centers = rela_matrix[:, :2, 3] # x 2
             
             if self.visualize:
                 # rela_centers_vis = rela_centers @ self.scatter_trans.T # type: ignore
@@ -656,6 +704,34 @@ class RemoveFutureLabels(BaseTransform):
             for j in range(co_length):
                 example_seq[i][j]['data_samples'] = Det3DDataSample()
         return input_dict
+    
+
+@TRANSFORMS.register_module()
+class RemoveHistoryInputs(BaseTransform):
+    def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
+        present_idx = input_dict['present_idx']
+        seq_length = input_dict['seq_length']
+        co_length = input_dict['co_length']
+        example_seq = input_dict['example_seq']
+        history_seq_timestamps = range(seq_length)[:present_idx]
+        for i in history_seq_timestamps:
+            for j in range(co_length):
+                example_seq[i][j]['inputs'] = {}
+        return input_dict
+
+
+@TRANSFORMS.register_module()
+class RemoveFutureInputs(BaseTransform):
+    def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
+        present_idx = input_dict['present_idx']
+        seq_length = input_dict['seq_length']
+        co_length = input_dict['co_length']
+        example_seq = input_dict['example_seq']
+        future_seq_timestamps = range(seq_length)[present_idx+1:]
+        for i in future_seq_timestamps:
+            for j in range(co_length):
+                example_seq[i][j]['inputs'] = {}
+        return input_dict
 
 
 @TRANSFORMS.register_module()
@@ -663,7 +739,7 @@ class PackSceneInfo(BaseTransform):
     def __init__(self,
                  meta_keys: tuple = (
                     'scene_name', 'seq_length', 'present_idx', 'co_agents', 'co_length', 'scene_length',
-                    'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'motion_matrix'
+                    'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'future_motion_matrix'
                     ),
                 delete_ori_key: bool = True,
                 

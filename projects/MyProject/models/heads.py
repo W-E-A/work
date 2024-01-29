@@ -162,6 +162,7 @@ class MTHead(BaseModule):
     def predict(self,
              feat_dict: dict,
              batch_input_metas: Optional[List[dict]] = None,
+             return_heatmaps: bool = False,
              ) -> dict:
 
         predict_dict = {}
@@ -169,8 +170,10 @@ class MTHead(BaseModule):
         if 'det_feat' in feat_dict and batch_input_metas != None:
             multi_tasks_multi_feats = feat_dict['det_feat']
             # TODO just one scale here
-            batch_result_instances = self.det_head.predict_by_feat(multi_tasks_multi_feats, batch_input_metas) # type: ignore
-            predict_dict['det_pred'] = batch_result_instances
+            if return_heatmaps:
+                predict_dict['det_pred'] = self.det_head.predict_heatmaps(multi_tasks_multi_feats) # type: ignore
+            else:
+                predict_dict['det_pred'] = self.det_head.predict_by_feat(multi_tasks_multi_feats, batch_input_metas) # type: ignore
 
         # if 'motion_feat' in feat_dict and batch_input_metas != None:
         #     multi_tasks_multi_feats = feat_dict['motion_feat']
@@ -300,53 +303,22 @@ class CenterHeadModified(BaseModule):
             feat = feat[mask] # B, m, 8/10
             feat = feat.view(-1, dim) # B*M 8/10 
         return feat
-
-    def get_targets(
+    
+    def get_relamaps(
         self,
         batch_gt_instances_3d: List[InstanceData],
     ) -> Tuple[List[Tensor]]:
         """
         task - tensor[b, anyshape] align with prediction format
         """
-        heatmaps, anno_boxes, inds, masks, relamaps = multi_apply(
-            self.get_targets_single, batch_gt_instances_3d)
-        # Transpose heatmaps
-        heatmaps = list(map(list, zip(*heatmaps)))
-        heatmaps = [torch.stack(hms_) for hms_ in heatmaps]
-        # Transpose anno_boxes
-        anno_boxes = list(map(list, zip(*anno_boxes)))
-        anno_boxes = [torch.stack(anno_boxes_) for anno_boxes_ in anno_boxes]
-        # Transpose inds
-        inds = list(map(list, zip(*inds)))
-        inds = [torch.stack(inds_) for inds_ in inds]
-        # Transpose inds
-        masks = list(map(list, zip(*masks)))
-        masks = [torch.stack(masks_) for masks_ in masks]
-        # Transpose heatmaps
+        relamaps = multi_apply(self.get_relamaps_single, batch_gt_instances_3d)
+        # Transpose relamaps
         relamaps = list(map(list, zip(*relamaps)))
         relamaps = [torch.stack(hms_) for hms_ in relamaps]
-        return heatmaps, anno_boxes, inds, masks, relamaps # type: ignore
+        return relamaps # type: ignore
 
-    def get_targets_single(self,
+    def get_relamaps_single(self,
                            gt_instances_3d: InstanceData) -> Tuple[Tensor]:
-        """Generate training targets for a single sample.
-
-        Args:
-            gt_instances_3d (:obj:`InstanceData`): Gt_instances of
-                single data sample. It usually includes
-                ``bboxes_3d`` and ``labels_3d`` attributes.
-
-        Returns:
-            tuple[list[torch.Tensor]]: Tuple of target including
-                the following results in order.
-
-                - list[torch.Tensor]: Heatmap scores.
-                - list[torch.Tensor]: Ground truth boxes.
-                - list[torch.Tensor]: Indexes indicating the position
-                    of the valid boxes.
-                - list[torch.Tensor]: Masks indicating which boxes
-                    are valid.
-        """
         gt_labels_3d = gt_instances_3d.labels_3d # type: ignore
         gt_bboxes_3d = gt_instances_3d.bboxes_3d # type: ignore
         track_id = gt_instances_3d.track_id # type: ignore
@@ -390,8 +362,153 @@ class CenterHeadModified(BaseModule):
             task_imps.append(torch.cat(task_imp, axis=0).to(device)) # type: ignore
             flag2 += len(mask)
         draw_gaussian = draw_heatmap_gaussian
-        # heatmaps, anno_boxes, inds, masks = [], [], [], []
-        heatmaps, anno_boxes, inds, masks, relamaps = [], [], [], [], []
+
+        relamaps = []
+
+        task_len = len(self.task_heads)
+        for idx in range(task_len):
+            relamap = gt_bboxes_3d.new_zeros((
+                len(self.class_names[idx]),
+                self.feature_map_size[0].item(),
+                self.feature_map_size[1].item()
+            )) # type: ignore
+
+            num_objs = min(task_boxes[idx].shape[0], self.max_objs)
+
+            for k in range(num_objs):
+                cls_id = task_classes[idx][k] - 1 # sub class
+                imp = task_imps[idx][k]
+
+                length = task_boxes[idx][k][3]
+                width = task_boxes[idx][k][4]
+                length = length / self.voxel_size[0] / self.out_size_factor
+                width = width / self.voxel_size[1] / self.out_size_factor
+
+                if width > 0 and length > 0:
+                    radius = gaussian_radius(
+                        (width, length),
+                        min_overlap=self.gaussian_overlap)
+                    radius = max(self.min_radius, int(radius))
+
+                    rela_radius = gaussian_radius(
+                        (width, length),
+                        min_overlap=self.rela_gaussian_overlap)
+                    rela_radius = max(self.min_radius, int(rela_radius))
+
+                    # be really careful for the coordinate system of
+                    # your box annotation.
+                    x, y = task_boxes[idx][k][0], task_boxes[idx][k][1]
+
+                    coor_x = (
+                        x - self.pc_range[0]
+                    ) / self.voxel_size[0] / self.out_size_factor
+                    coor_y = (
+                        y - self.pc_range[1]
+                    ) / self.voxel_size[1] / self.out_size_factor
+
+                    center = torch.tensor([coor_x, coor_y],
+                                          dtype=torch.float32,
+                                          device=device)
+                    center_int = center.to(torch.int32)
+
+                    # throw out not in range objects to avoid out of array
+                    # area when creating the heatmap
+                    if not (0 <= center_int[0] < self.feature_map_size[1]
+                            and 0 <= center_int[1] < self.feature_map_size[0]):
+                        continue
+                    
+                    if imp == True:
+                        draw_gaussian(relamap[cls_id], center_int, rela_radius)
+
+                    x, y = center_int[0], center_int[1]
+
+                    assert (y * self.feature_map_size[1] + x <
+                            self.feature_map_size[1] * self.feature_map_size[0])
+
+            relamaps.append(relamap)
+        return relamaps # type: ignore
+
+    def get_targets(
+        self,
+        batch_gt_instances_3d: List[InstanceData],
+    ) -> Tuple[List[Tensor]]:
+        """
+        task - tensor[b, anyshape] align with prediction format
+        """
+        heatmaps, anno_boxes, inds, masks = multi_apply(
+            self.get_targets_single, batch_gt_instances_3d)
+        # Transpose heatmaps
+        heatmaps = list(map(list, zip(*heatmaps)))
+        heatmaps = [torch.stack(hms_) for hms_ in heatmaps]
+        # Transpose anno_boxes
+        anno_boxes = list(map(list, zip(*anno_boxes)))
+        anno_boxes = [torch.stack(anno_boxes_) for anno_boxes_ in anno_boxes]
+        # Transpose inds
+        inds = list(map(list, zip(*inds)))
+        inds = [torch.stack(inds_) for inds_ in inds]
+        # Transpose inds
+        masks = list(map(list, zip(*masks)))
+        masks = [torch.stack(masks_) for masks_ in masks]
+        return heatmaps, anno_boxes, inds, masks # type: ignore
+
+    def get_targets_single(self,
+                           gt_instances_3d: InstanceData) -> Tuple[Tensor]:
+        """Generate training targets for a single sample.
+
+        Args:
+            gt_instances_3d (:obj:`InstanceData`): Gt_instances of
+                single data sample. It usually includes
+                ``bboxes_3d`` and ``labels_3d`` attributes.
+
+        Returns:
+            tuple[list[torch.Tensor]]: Tuple of target including
+                the following results in order.
+
+                - list[torch.Tensor]: Heatmap scores.
+                - list[torch.Tensor]: Ground truth boxes.
+                - list[torch.Tensor]: Indexes indicating the position
+                    of the valid boxes.
+                - list[torch.Tensor]: Masks indicating which boxes
+                    are valid.
+        """
+        gt_labels_3d = gt_instances_3d.labels_3d # type: ignore
+        gt_bboxes_3d = gt_instances_3d.bboxes_3d # type: ignore
+        track_id = gt_instances_3d.track_id # type: ignore
+        device = gt_labels_3d.device
+        gt_bboxes_3d = torch.cat( # get gravity center box
+            (gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]),
+            dim=1).to(device)
+        track_id = torch.tensor(track_id, dtype=gt_labels_3d.dtype, device=device)
+
+        # reorganize the gt_dict by tasks
+        task_masks = []
+        flag = 0
+        for class_name in self.class_names:
+            task_masks.append([
+                torch.where(gt_labels_3d == class_name.index(i) + flag)
+                for i in class_name
+            ])
+            flag += len(class_name)
+
+        task_boxes = []
+        task_classes = []
+        task_ids = []
+        flag2 = 0
+        for idx, mask in enumerate(task_masks):
+            task_box = []
+            task_class = []
+            task_id = []
+            for m in mask:
+                task_box.append(gt_bboxes_3d[m])
+                # 0 is background for each task, so we need to add 1 here.
+                task_class.append(gt_labels_3d[m] + 1 - flag2)
+                task_id.append(track_id[m])
+            task_boxes.append(torch.cat(task_box, axis=0).to(device)) # type: ignore
+            task_classes.append(torch.cat(task_class).long().to(device))
+            task_ids.append(torch.cat(task_id, axis=0).to(device)) # type: ignore
+            flag2 += len(mask)
+        draw_gaussian = draw_heatmap_gaussian
+        heatmaps, anno_boxes, inds, masks = [], [], [], []
 
         task_len = len(self.task_heads)
         for idx in range(task_len):
@@ -416,7 +533,6 @@ class CenterHeadModified(BaseModule):
 
             for k in range(num_objs):
                 cls_id = task_classes[idx][k] - 1 # sub class
-                imp = task_imps[idx][k]
 
                 length = task_boxes[idx][k][3]
                 width = task_boxes[idx][k][4]
@@ -458,9 +574,6 @@ class CenterHeadModified(BaseModule):
                         continue
 
                     draw_gaussian(heatmap[cls_id], center_int, radius)
-                    
-                    if imp == True:
-                        draw_gaussian(relamap[cls_id], center_int, rela_radius)
 
                     new_idx = k
                     x, y = center_int[0], center_int[1]
@@ -500,8 +613,7 @@ class CenterHeadModified(BaseModule):
             anno_boxes.append(anno_box)
             masks.append(mask)
             inds.append(ind)
-            relamaps.append(relamap)
-        return heatmaps, anno_boxes, inds, masks, relamaps # type: ignore
+        return heatmaps, anno_boxes, inds, masks # type: ignore
 
     def loss_by_feat(self,
                      preds_dicts: Tuple[List[dict]],
@@ -551,6 +663,16 @@ class CenterHeadModified(BaseModule):
             loss_dict[f'task{task_id}.loss_heatmap'] = loss_heatmap
             loss_dict[f'task{task_id}.loss_bbox'] = loss_bbox
         return loss_dict
+
+    def predict_heatmaps(self, preds_dicts: Tuple[List[dict]],
+                         ) -> List[Tensor]:
+        heatmaps = []
+        # FIXME single scale only now
+        assert isinstance(preds_dicts, Sequence) and isinstance(preds_dicts[0], Sequence) and len(preds_dicts[0]) == 1
+        for task_id, preds_dict in enumerate(preds_dicts):
+            pred_result = preds_dict[0]
+            heatmaps.append(pred_result['heatmap'].sigmoid()) # B c H W
+        return heatmaps
 
     def predict_by_feat(self, preds_dicts: Tuple[List[dict]],
                         batch_input_metas: List[dict],
