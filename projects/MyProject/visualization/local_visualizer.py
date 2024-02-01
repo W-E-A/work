@@ -67,6 +67,7 @@ class SimpleLocalVisualizer(Visualizer):
         map_vis = np.zeros((self.grid_size[0], self.grid_size[1], 3), dtype=np.uint8)
         map_vis[xy_voxel[:, 1], xy_voxel[:, 0]] = point_colors
         self.set_image(map_vis)
+        self.ax_save.set_autoscale_on(False)
 
     @master_only
     def set_points_from_npz(self, file_path: str, **kwargs):

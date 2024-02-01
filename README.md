@@ -1,3 +1,20 @@
+## command
+
+```Shell
+# without checkpoint
+nohup python -m torch.distributed.launch --nproc_per_node=3 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch &
+
+# with checkpoint
+nohup python -m torch.distributed.launch --nproc_per_node=3 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch --checkpoint /ai/volume/work/work_dirs/exp1/single_epoch_20.pth &
+
+# test
+python tools/test_v2x.py projects/MyProject/configs/exp1.py work_dirs/exp1/epoch_20.pth --work-dir work_dirs/uni_temppp
+```
+**工程文件夹：`projects/MyProject`**
+
+**配置文件：`projects/MyProject/configs/exp1.py`**
+
+
 ## 这里是源代码的根目录，放置打包工具和一些其他的文件
 
 #### `configs`是develop的原生配置，**将会在打包的时候放置在`mmdet3d/.mim`下以供`mim`来使用**
@@ -24,8 +41,6 @@
 - [ ] 给出合适的推理程序
 - [ ] 看检测部分的后处理是否有问题
 - [ ] 解决其他FIXME的部分
-
-通过得出：单车检测精度（实际上是为了得到一个主干预训练的权重）、where2comm融合上限精度（实际上为了得到一个良好的稀疏-稠密特征融合器的预训练）、where2comm融合检测精度（加载权重，并耦合检测的heatmap输出，无需训练，精度会低于上限）、new_method融合上限精度（用new_method无需训练，切换掩码即可），对比精度，并预计发现基于where2comm的精度会高很多。
 
 ## description
 

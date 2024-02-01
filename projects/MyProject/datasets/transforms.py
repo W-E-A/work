@@ -14,6 +14,7 @@ import cv2
 from ..utils import calc_relative_pose, mat2vec
 import matplotlib.pyplot as plt
 import torch
+import os
 
 # NOTE add all ego motion 6 DOF
 # NOTE 把现在和未来的筛选放这里，intput 提供历史+当前输入，而data_samples提供未来+当前标签
@@ -518,6 +519,8 @@ class ImportanceFilter(BaseTransform):
         self.ignore_thres = ignore_thres
         self.interrrupt_thres = interrrupt_thres
         self.visualize = visualize
+        if self.visualize is not None:
+            os.makedirs(self.visualize, exist_ok=True) # type: ignore
 
         self.voxel_size = np.array(self.voxel_size).astype(np.float32)
 
@@ -534,10 +537,11 @@ class ImportanceFilter(BaseTransform):
 
         if self.visualize:
             self.scatter_trans = np.array(
-                [[0, 1],
-                [-1, 0]],
+                [[-1, 0],
+                [0, -1]],
                 dtype=np.float32
             )
+            self.save_count = 0
             self.fig, self.ax = plt.subplots(1, 1)
 
         self.cmaps = [
@@ -552,6 +556,8 @@ class ImportanceFilter(BaseTransform):
     def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
         present_idx = input_dict['present_idx']
         seq_length = input_dict['seq_length']
+        scene_name = input_dict['scene_name']
+        seq_timestamp_0 = input_dict['seq_timestamps'][0]
         co_agents = copy.deepcopy(input_dict['co_agents'])
         example_seq = input_dict['example_seq']
         future_seq_timestamps = range(seq_length)[present_idx:]
@@ -612,10 +618,10 @@ class ImportanceFilter(BaseTransform):
             rela_centers = rela_matrix[:, :2, 3] # x 2
             
             if self.visualize:
-                # rela_centers_vis = rela_centers @ self.scatter_trans.T # type: ignore
+                rela_centers_vis = rela_centers @ self.scatter_trans.T # type: ignore
                 # FIXME 这里其实是BEV分割图片的问题，按照原方式编码才能对齐点云特征
                 # rela_centers_vis = rela_centers
-                rela_centers_voxel = np.round((rela_centers - self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
+                rela_centers_voxel = np.round((rela_centers_vis - self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
                 self.ax.imshow(np.full((self.grid_size[0], self.grid_size[1], 3), 127, dtype=np.uint8)) # type: ignore
                 self.ax.scatter(rela_centers_voxel[:, 0], rela_centers_voxel[:, 1], c = np.linspace(0.0, 1.0, future_length)[::-1], cmap='Blues', s=8) # type: ignore
             
@@ -632,10 +638,10 @@ class ImportanceFilter(BaseTransform):
                     valid_id.append(id)
 
                 if self.visualize:
-                    # centers_vis = centers @ self.scatter_trans.T # type: ignore
+                    centers_vis = centers @ self.scatter_trans.T # type: ignore
                     # FIXME 这里其实是BEV分割图片的问题，按照原方式编码才能对齐点云特征
                     # centers_vis = centers
-                    voxel_centers = np.round((centers - self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
+                    voxel_centers = np.round((centers_vis - self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
                     if isvalid:
                         self.ax.scatter(voxel_centers[: ,0], voxel_centers[:, 1], c = np.linspace(0.0, 1.0, len(voxel_centers))[::-1], cmap=color, s=3) # type: ignore
                     else:
@@ -650,7 +656,9 @@ class ImportanceFilter(BaseTransform):
                 print(agent)
                 print(present_instances_3d.track_id)
                 print(valid_id_mask)
-                self.fig.savefig(self.visualize, dpi = 300) # type: ignore # FIXME MORE FIG ONCE
+                self.ax.set_axis_off()
+                save_name = os.path.join(self.visualize, f'rela_{scene_name}_{seq_timestamp_0}.png')
+                self.fig.savefig(save_name, dpi = 300, bbox_inches='tight', pad_inches=0) # type: ignore # FIXME MORE FIG ONCE
                 self.ax.cla()
 
         example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d['importance'] = \

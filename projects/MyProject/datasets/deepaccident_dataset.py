@@ -34,10 +34,12 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
                  co_agents: Tuple[str] = ('ego_vehicle',),
                  filter_empty_gt: bool = True,
                  test_mode: bool = False,
+                 scene_shuffle: bool = False,
                  with_velocity: bool = True,
                  adeptive_seq_length: bool = True,
                  scene_pipline: Optional[List[Union[dict, Callable]]] = [],
                  **kwargs) -> None:
+        self.scene_shuffle = scene_shuffle
         self.with_velocity = with_velocity
         self.adeptive_seq_length = adeptive_seq_length
         self.scene_pipline = Compose(scene_pipline)
@@ -180,7 +182,12 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
         for k, v in metainfo.items():
             self._metainfo.setdefault(k, v)
 
-        total_scene_name = tuple(set([item['scene_name'] for item in raw_data_list]))
+        total_scene_name = list(set([item['scene_name'] for item in raw_data_list]))
+        if not self.scene_shuffle:
+            def custom_sort(s):
+                parts = s.split('_')
+                return (parts[2], parts[3], parts[4])
+            total_scene_name = sorted(total_scene_name, key=custom_sort)
 
         scene_data = {scene_name : {agent : [] for agent in self.co_agents} for scene_name in total_scene_name}
         for raw_data in raw_data_list:
@@ -206,10 +213,10 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
                 data['seq_length'] = data['scene_length']
             else:
                 assert data['scene_length'] - self.seq_length + 1 > 0, f"The obtained sequence length is too long, maximum length {data['scene_length']}, required length {self.seq_length}"
-            for i in range(data['seq_length'] - 1, data['scene_length'], self.key_interval):
+            for i in range(data['seq_length'] - 1, data['scene_length'], self.key_interval): # 5 6 7 8 9 10 11 12 13 14
                 frame = []
                 seq_timestamps = []
-                for j in range(i - data['seq_length'] + 1, i + 1):
+                for j in range(i - data['seq_length'] + 1, i + 1): # 0~6 9~15
                     frame.append([agent_data_dict[agent][j] for agent in self.co_agents])
                     seq_timestamps.append(data['scene_timestamps'][j])
                 data_list.append({

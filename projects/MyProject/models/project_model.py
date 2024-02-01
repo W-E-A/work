@@ -7,6 +7,7 @@ from torch import Tensor
 from ..utils import warp_features
 import copy
 from mmdet3d.structures import Det3DDataSample
+from mmengine.structures import InstanceData
 from ..visualization import SimpleLocalVisualizer
 import numpy as np
 
@@ -65,7 +66,9 @@ class ProjectModel(MVXTwoStageDetector):
             self.ego_name = self.pts_fusion_cfg.get("ego_name", "ego_vehicle")
             self.pc_range = self.pts_fusion_cfg.get("pc_range", [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0])
             self.warp_size = (self.pc_range[3], self.pc_range[4])
-
+        
+        self.comm_rate = 0.0
+        self.comm_count = 0
 
     @property
     def with_det_head(self):
@@ -197,7 +200,7 @@ class ProjectModel(MVXTwoStageDetector):
         self.ego_id = co_agents.index(self.ego_name)
         assert mode in ('loss', 'predict')
 
-        ################################ INPUT DEBUG ################################
+        ################################ INPUT DEBUG (stop here)################################
         # scene_info[0].pop('pose_matrix')
         # scene_info[0].pop('future_motion_matrix')
         # print(scene_info[0])
@@ -207,7 +210,7 @@ class ProjectModel(MVXTwoStageDetector):
         #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
         # else:
         #     return []
-        ################################ INPUT DEBUG ################################
+        ################################ INPUT DEBUG (stop here)################################
 
         # 0, 1, 2, ..., n so first[0] will be the earliest history, last[-1] is the future feature
         # Note that the entire sequence contains all frames from history, present, and future
@@ -280,7 +283,6 @@ class ProjectModel(MVXTwoStageDetector):
         #     return []
         ################################ DRAW VISIBLE TARGET ################################
 
-        # if (mode == 'loss' and self.train_mode != 'single') or (mode == 'predict' and self.test_mode != 'single'):
         if (mode == 'loss' and self.train_mode != 'single') or mode == 'predict':
             ego_coop_samples = agent_batch_samples[self.ego_id*batch_size : (self.ego_id+1)*batch_size] # fetch ego coop bboxes
             ego_coop_input_metas = [samples.metainfo for samples in ego_coop_samples] # 1*B
@@ -291,8 +293,9 @@ class ProjectModel(MVXTwoStageDetector):
                 if j != self.ego_id:
                     other_coop_instances = agent_batch_visible_instances[j*batch_size : (j+1)*batch_size] # fetch other coop bboxes, visible only
                     for b in range(batch_size):
-                        other_track_id = other_coop_instances[b].track_id
                         ego_track_id = ego_coop_instances[b].track_id
+                        # other visible 
+                        other_track_id = other_coop_instances[b].track_id
                         in_mask = np.isin(ego_track_id, other_track_id)
                         new_isvalid = copy.deepcopy(ego_coop_instances[b].coop_isvalid)
                         new_isvalid[in_mask] = True
@@ -451,8 +454,9 @@ class ProjectModel(MVXTwoStageDetector):
                     ################################ SHOW SPARSE TEST WHERE2COMM (COMM) MASK ################################
                     
             elif self.test_mode == 'new_method':
-                relamaps = self.fusion_multi_task_head.det_head.get_relamaps(agent_batch_visible_instances)
-                relamaps = torch.cat(relamaps, dim=1) # A*B c1+c2+c... H W
+                relamaps = self.multi_task_head.det_head.get_relamaps(agent_batch_visible_instances)
+                relamaps = torch.stack(relamaps) # A*B c1+c2+c... 1 H W
+                relamaps = torch.squeeze(relamaps, dim=2)# A*B c1+c2+c... H W
                 relamaps = torch.max(relamaps, dim=1, keepdim=True).values # AB 1 H W
                 comm_masks = torch.where(
                     relamaps > self.score_threshold,
@@ -483,15 +487,40 @@ class ProjectModel(MVXTwoStageDetector):
         agent_fusion_masks = fusion_masks[indices] # A-1 B 1 H W # type: ignore
         # ego_fusion_masks = fusion_masks[self.ego_id] # B 1 H W
 
+        if mode == 'predict' and self.test_mode != 'single':
+            if self.test_mode == 'full':
+                self.comm_rate = 1.0
+                print(self.comm_rate)
+            else:
+                rate = torch.sum(agent_fusion_masks[0] > 0.5) / agent_fusion_masks[0].numel()
+                self.comm_rate += rate.item()
+                self.comm_count += 1
+                print(self.comm_rate / self.comm_count)
+        else:
+            self.comm_rate = 0.0
+            print(self.comm_rate)
+
         agent_comm_features = agent_fusion_features * agent_fusion_masks # A-1 B C H W # type: ignore
             
         agent_warpped_comm_features = []
+
+        if mode == 'predict' and self.test_mode != 'single':
+            batch_other_impo_instances = []
 
         for b in range(batch_size):
             present_pose_matrix = scene_info[b].pose_matrix[present_idx, indices, self.ego_id, ...] # use ego to other1, other2, ... # type: ignore
             agent_comm_feat = agent_comm_features[:, b] # A-1, C, H, W
             warp_comm_feat = warp_features(agent_comm_feat, present_pose_matrix, self.warp_size) # A-1 C H W
             agent_warpped_comm_features.append(warp_comm_feat)
+            if mode == 'predict' and self.test_mode != 'single':
+                inv_present_pose_matrix = scene_info[b].pose_matrix[present_idx, self.ego_id, indices, ...] # use other1, other2, ... to ego # type: ignore
+                other_visible_instances = [agent_batch_visible_instances[idx*batch_size + b] for idx in indices] # type: ignore
+                other_impo_instances = [instance[instance.importance] for instance in other_visible_instances] # importance A-1
+                for idx, _ in enumerate(indices): #type: ignore
+                    trans = inv_present_pose_matrix[idx]
+                    other_impo_instances[idx].bboxes_3d.rotate(trans[:3, :3].T, None)
+                    other_impo_instances[idx].bboxes_3d.translate(trans[:3, 3])
+                batch_other_impo_instances.append(InstanceData.cat(other_impo_instances)) # type: ignore
         ################################ SHOW WARPPED FEATURE ################################
         # import os
         # os.makedirs('./data/step_vis_data', exist_ok=True)
@@ -514,7 +543,7 @@ class ProjectModel(MVXTwoStageDetector):
         # coop send and receive
         ego_fusion_features = ego_fusion_features.unsqueeze(1) # B 1 C H W # type: ignore
         ego_fusion_result = self.pts_fusion_layer(ego_fusion_features, agent_warpped_comm_features).squeeze(1) # B C H W
-        coop_head_feat_dict = self.fusion_multi_task_head([ego_fusion_result]) # out from dethead and motionhead
+        coop_head_feat_dict = self.multi_task_head([ego_fusion_result]) # out from dethead and motionhead
 
         coop_instances = []
         for instance in ego_coop_instances: # type: ignore
@@ -522,7 +551,7 @@ class ProjectModel(MVXTwoStageDetector):
         
         if mode == 'loss':
             loss_dict = {}
-            HM, AB, ID, MS = self.fusion_multi_task_head.det_head.get_targets(coop_instances) # A*B final fusion detect # type: ignore
+            HM, AB, ID, MS = self.multi_task_head.det_head.get_targets(coop_instances) # A*B final fusion detect # type: ignore
             # T * [A*B C H W] T * [A*B M 8/10] T * [A*B M] T * [A*B M]
             coop_det_gt = {
                 'heatmaps':HM,
@@ -530,7 +559,7 @@ class ProjectModel(MVXTwoStageDetector):
                 'inds':ID,
                 'masks':MS,
             }
-            coop_det_loss_dict = self.fusion_multi_task_head.loss(coop_head_feat_dict,
+            coop_det_loss_dict = self.multi_task_head.loss(coop_head_feat_dict,
                                                 det_gt = coop_det_gt,
                                                 motion_gt = None,
                                                 gather_task_loss = self.gather_task_loss)
@@ -544,7 +573,12 @@ class ProjectModel(MVXTwoStageDetector):
 
         elif mode == 'predict':
             ret_list = []
-            predict_dict = self.fusion_multi_task_head.predict(coop_head_feat_dict,  ego_coop_input_metas) # type: ignore
+            predict_dict = self.multi_task_head.predict(coop_head_feat_dict,  ego_coop_input_metas) # type: ignore
+
+            ego_visible_instances = []
+            for instance in ego_coop_instances: # type: ignore
+                ego_visible_instances.append(instance[instance.bbox_3d_isvalid])
+
             if 'det_pred' in predict_dict:
                 pred_result = predict_dict['det_pred'] # add to pred_instances_3d from None to instance of bboxes_3d scores_3d labels_3d
                 for b in range(batch_size):
@@ -559,11 +593,33 @@ class ProjectModel(MVXTwoStageDetector):
                             lidar_path = ego_coop_input_metas[b]['lidar_path'], # type: ignore
                         )
                     )
+
+
+                    # 用于经过new_method的评估
+                    # impo_track_id = batch_other_impo_instances[b].track_id # type: ignore
+                    # ego_track_id = ego_visible_instances[b].track_id
+                    # in_mask = np.isin(ego_track_id, impo_track_id)
+                    # notin_mask = np.logical_not(in_mask)
+                    # in_1 = ego_visible_instances[b][notin_mask]
+                    # in_1.pop('track_id') # no need array
+                    # in_1.pop('bbox_3d_isvalid') # no need array
+                    # in_1.pop('coop_isvalid') # no need array
+                    # in_1.pop('importance') # no need array
+                    # in_2 = batch_other_impo_instances[b] # type: ignore
+                    # in_2.pop('track_id') # no need array
+                    # in_2.pop('bbox_3d_isvalid') # no need array
+                    # in_2.pop('importance') # no need array
+                    # ins = [in_1, in_2]
+                    # sample.gt_instances_3d = InstanceData.cat(ins)
+
+                    # 用于协同评估
                     sample.gt_instances_3d = coop_instances[b] # type: ignore
                     sample.gt_instances_3d.pop('track_id') # no need array
                     sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
                     sample.gt_instances_3d.pop('coop_isvalid') # no need array
                     sample.gt_instances_3d.pop('importance') # no need array
+
+
                     sample.pred_instances_3d = pred_result[b]
                     ret_list.append(sample)
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
@@ -571,11 +627,19 @@ class ProjectModel(MVXTwoStageDetector):
                 os.makedirs('./data/step_vis_data', exist_ok=True)
                 visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 coop_instances_ori = agent_batch_visible_instances[self.ego_id * batch_size: (self.ego_id + 1)*batch_size]
-                # coop_instances_importance = copy.deepcopy(coop_instances_ori)
                 for idx, result in enumerate(ret_list):
                     visualizer.set_points_from_npz(result.lidar_path)
+
+
+                    # 用于协同的可视化
                     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#FFFF00')
                     visualizer.draw_bev_bboxes(coop_instances_ori[idx].bboxes_3d, c='#00FF00')
+
+                    # 用于经过new_method的可视化
+                    # visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
+
+
+                    visualizer.draw_bev_bboxes(batch_other_impo_instances[idx].bboxes_3d, c='#00BFFF') # type: ignore
                     thres = self.score_threshold
                     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
                     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')

@@ -271,6 +271,9 @@ class CenterHeadModified(BaseModule):
         if self.test_cfg:
             self.nms_type = self.test_cfg['nms_type']
             self.test_min_radius = self.test_cfg['min_radius']
+            self.nms_rescale_factor = self.test_cfg.get(
+                'nms_rescale_factor',
+                [1.0 for _ in range(len(self.task_heads))])
             self.post_max_size = self.test_cfg['post_max_size']
             self.post_center_limit_range = self.test_cfg['post_center_limit_range']
             self.score_threshold = self.test_cfg['score_threshold']
@@ -742,7 +745,8 @@ class CenterHeadModified(BaseModule):
                                              batch_cls_preds,
                                              batch_reg_preds,
                                              batch_cls_labels,
-                                             batch_input_metas)) # task * [ batch * [dict, ...]]
+                                             batch_input_metas,
+                                             task_id)) # task * [ batch * [dict, ...]]
 
         ret_list = []
         for i in range(batch_size):
@@ -768,7 +772,8 @@ class CenterHeadModified(BaseModule):
         return ret_list
 
     def get_task_detections(self, num_class_with_bg, batch_cls_preds,
-                            batch_reg_preds, batch_cls_labels, img_metas):
+                            batch_reg_preds, batch_cls_labels, img_metas,
+                            task_id):
         predictions_dicts = []
         post_center_range = self.post_center_limit_range
         if len(post_center_range) > 0:
@@ -779,6 +784,14 @@ class CenterHeadModified(BaseModule):
 
         for i, (box_preds, cls_preds, cls_labels) in enumerate(
                 zip(batch_reg_preds, batch_cls_preds, batch_cls_labels)):
+
+            nms_rescale_factor = self.nms_rescale_factor[task_id]
+            if isinstance(nms_rescale_factor, list):
+                for cid in range(len(nms_rescale_factor)):
+                    box_preds[cls_labels == cid, 3:6] = \
+                    box_preds[cls_labels == cid, 3:6] * nms_rescale_factor[cid]
+            else:
+                box_preds[:, 3:6] = box_preds[:, 3:6] * nms_rescale_factor
 
             # Apply NMS in bird eye view
 
@@ -811,14 +824,26 @@ class CenterHeadModified(BaseModule):
                     box_preds[:, :], self.bbox_coder.code_size).bev)
                 # the nms in 3d detection just remove overlap boxes.
 
+                if isinstance(self.nms_thr, list):
+                    nms_thresh = self.nms_thr[task_id]
+                else:
+                    nms_thresh = self.nms_thr
+
                 selected = nms_bev(
                     boxes_for_nms, # type: ignore
                     top_scores,
-                    thresh=self.nms_thr,
+                    thresh=nms_thresh,
                     pre_max_size=self.pre_max_size,
                     post_max_size=self.post_max_size)
             else:
                 selected = [] # all score less than score_threshold
+
+            if isinstance(nms_rescale_factor, list):
+                for cid in range(len(nms_rescale_factor)):
+                    box_preds[cls_labels == cid, 3:6] = \
+                    box_preds[cls_labels == cid, 3:6] / nms_rescale_factor[cid]
+            else:
+                box_preds[:, 3:6] = box_preds[:, 3:6] / nms_rescale_factor
 
             # if selected is not None:
             selected_boxes = box_preds[selected] # n, 7/9

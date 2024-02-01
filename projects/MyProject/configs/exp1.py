@@ -46,9 +46,10 @@ det_common_heads = dict(
     # vel=(2, 2)
 )
 
+# train params
 train_batch_size = 1
 # train_batch_size = 2
-train_num_workers = 80
+train_num_workers = 8
 # train_seq_length = 100
 train_seq_length = 6
 train_present_idx = 0
@@ -56,12 +57,13 @@ train_key_interval = 1
 train_co_agents = ('ego_vehicle', 'infrastructure')
 # train_co_agents = ('ego_vehicle',)
 train_ego_name = 'ego_vehicle'
-train_mode = 'sparse_fusion' # sparse_fusion, dense_fusion, single
-train_comm_ksize = 5
+train_mode = 'sparse_fusion' # sparse_fusion, dense_fusion, single 分别为where2comm的通信，全通信，单车检测
+train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
 
+# test params
 test_batch_size = 1
 # test_batch_size = 2
-test_num_workers = 6
+test_num_workers = 1
 # test_seq_length = 100
 test_seq_length = 6
 test_present_idx = 0
@@ -69,10 +71,14 @@ test_key_interval = 1
 test_co_agents = ('ego_vehicle', 'infrastructure')
 # test_co_agents = ('ego_vehicle',)
 test_ego_name = 'ego_vehicle'
-test_mode = 'where2comm' # full where2comm new_method single
-test_comm_ksize = 5
+test_mode = 'where2comm' # full where2comm new_method single 分别为全通信，where2comm的通信，新方法通信，单车检测
+test_comm_ksize = 5 # comm kernel size 通信高斯卷积核的大小，用于放大heatmap
 
-test = True
+
+
+test = True # FIXME 注意训练和测试的时候需要修改，True为测试模式， False为训练模式，用于切换训练和测试的不同参数
+
+
 
 train_pipline = [
     dict(
@@ -128,16 +134,6 @@ test_pipline = [
         ),
     dict(type='ConstructEGOBox'),
     # dict(type='ObjectSample', db_sampler=db_sampler),
-    # dict( # FIXME how to deal with the feture wrapper
-    #     type='GlobalRotScaleTrans',
-    #     rot_range=[-0.3925, 0.3925],
-    #     scale_ratio_range=[0.95, 1.05],
-    #     translation_std=[0, 0, 0]),
-    # dict(
-    #     type='RandomFlip3D',
-    #     sync_2d=False,
-    #     flip_ratio_bev_horizontal=0.5,
-    #     flip_ratio_bev_vertical=0.5),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
     dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range),
     dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
@@ -166,7 +162,7 @@ train_scene_pipline = [
         ignore_thres = 0.5,
         interrrupt_thres = 10,
         visualize = None,
-        # visualize = './data/gt.png',
+        # visualize = './data/step_vis_data', # 解注释，然后解注释模型forward的INPUT DEBUG即可输出
     ),
     dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
@@ -191,7 +187,7 @@ test_scene_pipline = [
         ignore_thres = 0.5,
         interrrupt_thres = 10,
         visualize = None,
-        # visualize = './data/step_vis_data/gt.png',
+        # visualize = './data/step_vis_data', # 解注释，然后解注释模型forward的INPUT DEBUG即可输出
     ),
     dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
@@ -223,7 +219,8 @@ train_dataloader = dict(
         present_idx = train_present_idx,
         co_agents = train_co_agents,
         filter_empty_gt = True,
-        test_mode = test,
+        test_mode = False,
+        scene_shuffle = False,
         with_velocity = det_with_velocity,
         adeptive_seq_length = True,
         scene_pipline = train_scene_pipline,
@@ -250,7 +247,8 @@ test_dataloader = dict(
         present_idx = test_present_idx,
         co_agents = test_co_agents,
         filter_empty_gt = True,
-        test_mode = test,
+        test_mode = True,
+        scene_shuffle = True,
         with_velocity = det_with_velocity,
         adeptive_seq_length = True,
         scene_pipline = test_scene_pipline,
@@ -359,7 +357,7 @@ model = dict(
             share_conv_channel=64,
             num_heatmap_convs=2,
             norm_bbox=True,
-            with_velocity=det_with_velocity, # Modified
+            with_velocity=det_with_velocity,
         ),
     ),
     pts_train_cfg=dict(
@@ -379,12 +377,14 @@ model = dict(
         nms_type='rotate',
         post_center_limit_range=det_center_range,
         score_threshold=0.1,
-        nms_thr=0.2,
+        nms_thr=[0.2, 0.2, 0.2, 0.2, 0.2, 0.5],
+        nms_rescale_factor=[1.0, 0.7, 0.7, 1.0, 1.0, 4.5],
+        # nms_rescale_factor=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
         pre_max_size=1000,
         post_max_size=83,
         max_per_img=500,
         max_pool_nms=False,
-        min_radius=[4, 12, 10, 1, 0.85, 0.175],
+        min_radius=[4, 10, 12, 1, 0.85, 0.175],
         out_size_factor=det_out_factor,
         voxel_size=voxel_size[:2],
         pc_range=lidar_range[:2],
@@ -397,7 +397,6 @@ model = dict(
 )
 
 lr = 1 * 1e-4
-gpus = 3
 checkpoint_interval = 2
 
 log_level = 'INFO'
@@ -481,17 +480,6 @@ train_cfg = dict(
 # val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
-# visualizer=dict(
-#     type='Visualizer',
-#     # name='comm_vis',
-#     vis_backends=[
-#         # dict(type='LocalVisBackend'),
-#         dict(type='TensorboardVisBackend'),
-#     ],
-#     # save_dir='comm_mask'
-# )
-
-# vis_backends = [dict(type='LocalVisBackend'), dict(type='TensorboardVisBackend'),]
 vis_backends = [dict(type='LocalVisBackend'), ]
 visualizer = dict(
     type='SimpleLocalVisualizer',
@@ -507,7 +495,7 @@ visualizer = dict(
 #       or not by default.
 #   - `base_batch_size` = (8 GPUs) x (4 samples per GPU).
 
-auto_scale_lr = dict(enable=False, base_batch_size=train_batch_size * gpus)
+auto_scale_lr = dict(enable=False, base_batch_size=32)
 
 # dist
 find_unused_parameters = True
