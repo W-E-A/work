@@ -9,6 +9,12 @@ nohup python -m torch.distributed.launch --nproc_per_node=3 tools/train_v2x.py p
 
 # test
 python tools/test_v2x.py projects/MyProject/configs/exp1.py work_dirs/exp1/epoch_20.pth --work-dir work_dirs/uni_temppp
+
+#create data
+# dair-v2x-c
+python tools/create_data.py dair-v2x --root-path /ai/volume/dataset/cooperative-vehicle-infrastructure --version c --out-dir ./data/dair
+# deepaccident
+python tools/create_data.py deepaccident --root-path /ai/datasets/DeepAccident_data --sample-interval 5 --out-dir ./data/deepaccident
 ```
 **工程文件夹：`projects/MyProject`**
 

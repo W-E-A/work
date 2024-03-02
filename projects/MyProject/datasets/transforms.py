@@ -623,6 +623,7 @@ class ImportanceFilter(BaseTransform):
                 # rela_centers_vis = rela_centers
                 rela_centers_voxel = np.round((rela_centers_vis - self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
                 self.ax.imshow(np.full((self.grid_size[0], self.grid_size[1], 3), 127, dtype=np.uint8)) # type: ignore
+                self.ax.set_autoscale_on(False)
                 self.ax.scatter(rela_centers_voxel[:, 0], rela_centers_voxel[:, 1], c = np.linspace(0.0, 1.0, future_length)[::-1], cmap='Blues', s=8) # type: ignore
             
             valid_id = []

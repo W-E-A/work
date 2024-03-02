@@ -70,18 +70,6 @@ class ProjectModel(MVXTwoStageDetector):
         self.comm_rate = 0.0
         self.comm_count = 0
 
-    @property
-    def with_det_head(self):
-        """bool: Whether the multi task head has a det head."""
-        return hasattr(self,
-                       'multi_task_head') and self.multi_task_head.det_head is not None
-
-    @property
-    def with_motion_head(self):
-        """bool: Whether the multi task head has a motion head."""
-        return hasattr(self,
-                       'multi_task_head') and self.multi_task_head.motion_head is not None
-    
     def extract_pts_feat(
             self,
             voxel_dict: Dict[str, Tensor],
@@ -286,7 +274,7 @@ class ProjectModel(MVXTwoStageDetector):
         if (mode == 'loss' and self.train_mode != 'single') or mode == 'predict':
             ego_coop_samples = agent_batch_samples[self.ego_id*batch_size : (self.ego_id+1)*batch_size] # fetch ego coop bboxes
             ego_coop_input_metas = [samples.metainfo for samples in ego_coop_samples] # 1*B
-            ego_coop_instances = [samples.gt_instances_3d for samples in ego_coop_samples] # 1*B
+            ego_coop_instances = [samples.gt_instances_3d for samples in ego_coop_samples] # 1*B # raw all instances
             for b in range(batch_size):
                 ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
             for j in range(co_length):
@@ -501,26 +489,13 @@ class ProjectModel(MVXTwoStageDetector):
             print(self.comm_rate)
 
         agent_comm_features = agent_fusion_features * agent_fusion_masks # A-1 B C H W # type: ignore
-            
+
         agent_warpped_comm_features = []
-
-        if mode == 'predict' and self.test_mode != 'single':
-            batch_other_impo_instances = []
-
         for b in range(batch_size):
             present_pose_matrix = scene_info[b].pose_matrix[present_idx, indices, self.ego_id, ...] # use ego to other1, other2, ... # type: ignore
             agent_comm_feat = agent_comm_features[:, b] # A-1, C, H, W
             warp_comm_feat = warp_features(agent_comm_feat, present_pose_matrix, self.warp_size) # A-1 C H W
             agent_warpped_comm_features.append(warp_comm_feat)
-            if mode == 'predict' and self.test_mode != 'single':
-                inv_present_pose_matrix = scene_info[b].pose_matrix[present_idx, self.ego_id, indices, ...] # use other1, other2, ... to ego # type: ignore
-                other_visible_instances = [agent_batch_visible_instances[idx*batch_size + b] for idx in indices] # type: ignore
-                other_impo_instances = [instance[instance.importance] for instance in other_visible_instances] # importance A-1
-                for idx, _ in enumerate(indices): #type: ignore
-                    trans = inv_present_pose_matrix[idx]
-                    other_impo_instances[idx].bboxes_3d.rotate(trans[:3, :3].T, None)
-                    other_impo_instances[idx].bboxes_3d.translate(trans[:3, 3])
-                batch_other_impo_instances.append(InstanceData.cat(other_impo_instances)) # type: ignore
         ################################ SHOW WARPPED FEATURE ################################
         # import os
         # os.makedirs('./data/step_vis_data', exist_ok=True)
@@ -540,18 +515,31 @@ class ProjectModel(MVXTwoStageDetector):
         #     return []
         ################################ SHOW WARPPED FEATURE ################################
         agent_warpped_comm_features = torch.stack(agent_warpped_comm_features, dim=0) # B A-1 C H W
+
         # coop send and receive
         ego_fusion_features = ego_fusion_features.unsqueeze(1) # B 1 C H W # type: ignore
         ego_fusion_result = self.pts_fusion_layer(ego_fusion_features, agent_warpped_comm_features).squeeze(1) # B C H W
-        coop_head_feat_dict = self.multi_task_head([ego_fusion_result]) # out from dethead and motionhead
+        coop_head_feat_dict = self.fusion_multi_task_head([ego_fusion_result]) # out from dethead and motionhead
 
         coop_instances = []
         for instance in ego_coop_instances: # type: ignore
             coop_instances.append(instance[instance.coop_isvalid])
+
+        if mode == 'predict' and self.test_mode != 'single':
+            batch_other_impo_instances = []
+            for b in range(batch_size):
+                inv_present_pose_matrix = scene_info[b].pose_matrix[present_idx, self.ego_id, indices, ...] # use other1, other2, ... to ego # type: ignore
+                other_visible_instances = [agent_batch_visible_instances[idx*batch_size + b] for idx in indices] # type: ignore
+                other_impo_instances = [instance[instance.importance] for instance in other_visible_instances] # importance A-1
+                for idx, _ in enumerate(indices): #type: ignore
+                    trans = inv_present_pose_matrix[idx]
+                    other_impo_instances[idx].bboxes_3d.rotate(trans[:3, :3].T, None)
+                    other_impo_instances[idx].bboxes_3d.translate(trans[:3, 3])
+                batch_other_impo_instances.append(InstanceData.cat(other_impo_instances)) # type: ignore
         
         if mode == 'loss':
             loss_dict = {}
-            HM, AB, ID, MS = self.multi_task_head.det_head.get_targets(coop_instances) # A*B final fusion detect # type: ignore
+            HM, AB, ID, MS = self.fusion_multi_task_head.det_head.get_targets(coop_instances) # A*B final fusion detect # type: ignore
             # T * [A*B C H W] T * [A*B M 8/10] T * [A*B M] T * [A*B M]
             coop_det_gt = {
                 'heatmaps':HM,
@@ -559,7 +547,7 @@ class ProjectModel(MVXTwoStageDetector):
                 'inds':ID,
                 'masks':MS,
             }
-            coop_det_loss_dict = self.multi_task_head.loss(coop_head_feat_dict,
+            coop_det_loss_dict = self.fusion_multi_task_head.loss(coop_head_feat_dict,
                                                 det_gt = coop_det_gt,
                                                 motion_gt = None,
                                                 gather_task_loss = self.gather_task_loss)
@@ -573,7 +561,7 @@ class ProjectModel(MVXTwoStageDetector):
 
         elif mode == 'predict':
             ret_list = []
-            predict_dict = self.multi_task_head.predict(coop_head_feat_dict,  ego_coop_input_metas) # type: ignore
+            predict_dict = self.fusion_multi_task_head.predict(coop_head_feat_dict,  ego_coop_input_metas) # type: ignore
 
             ego_visible_instances = []
             for instance in ego_coop_instances: # type: ignore
@@ -623,30 +611,30 @@ class ProjectModel(MVXTwoStageDetector):
                     sample.pred_instances_3d = pred_result[b]
                     ret_list.append(sample)
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
-                import os
-                os.makedirs('./data/step_vis_data', exist_ok=True)
-                visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
-                coop_instances_ori = agent_batch_visible_instances[self.ego_id * batch_size: (self.ego_id + 1)*batch_size]
-                for idx, result in enumerate(ret_list):
-                    visualizer.set_points_from_npz(result.lidar_path)
+                # import os
+                # os.makedirs('./data/step_vis_data', exist_ok=True)
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                # coop_instances_ori = agent_batch_visible_instances[self.ego_id * batch_size: (self.ego_id + 1)*batch_size]
+                # for idx, result in enumerate(ret_list):
+                #     visualizer.set_points_from_npz(result.lidar_path)
 
 
-                    # 用于协同的可视化
-                    visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#FFFF00')
-                    visualizer.draw_bev_bboxes(coop_instances_ori[idx].bboxes_3d, c='#00FF00')
+                #     # 用于协同的可视化
+                #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#FFFF00')
+                #     visualizer.draw_bev_bboxes(coop_instances_ori[idx].bboxes_3d, c='#00FF00')
 
-                    # 用于经过new_method的可视化
-                    # visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
+                #     # 用于经过new_method的可视化
+                #     # visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
 
 
-                    visualizer.draw_bev_bboxes(batch_other_impo_instances[idx].bboxes_3d, c='#00BFFF') # type: ignore
-                    thres = self.score_threshold
-                    result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
-                    visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
-                    visualizer.just_save(f'./data/step_vis_data/coop_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+                #     visualizer.draw_bev_bboxes(batch_other_impo_instances[idx].bboxes_3d, c='#00BFFF') # type: ignore
+                #     thres = self.score_threshold
+                #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
+                #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
+                #     visualizer.just_save(f'./data/step_vis_data/coop_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
 
-                import pdb
-                pdb.set_trace()
+                # import pdb
+                # pdb.set_trace()
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
             return ret_list # type: ignore
         

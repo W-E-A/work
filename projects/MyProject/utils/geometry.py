@@ -126,11 +126,11 @@ def vec2mat(vec: Union[np.ndarray, Tensor]):
         A transformation matrix [B,4,4]
     """
     # vec N 6
-    translation = vec[..., :3].unsqueeze(-1)  # [...x3x1]
-    rot = vec[..., 3:].contiguous()  # [...x3]
+    translation = vec[..., :3].unsqueeze(-1)  # [...x3x1] # type: ignore
+    rot = vec[..., 3:].contiguous()  # [...x3] # type: ignore
     rot_mat = euler2mat(rot)  # [...,3,3]
     transform_mat = torch.cat([rot_mat, translation], dim=-1)  # [...,3,4]
-    transform_mat = torch.nn.functional.pad(
+    transform_mat = F.pad(
         transform_mat, [0, 0, 0, 1], value=0)  # [...,4,4]
     transform_mat[..., 3, 3] = 1.0
     return transform_mat
@@ -155,7 +155,7 @@ def invert_pose_matrix(x):
 
     inverse_mat = torch.cat(
         [transposed_rotation, -torch.bmm(transposed_rotation, translation)], dim=-1)  # [B,3,4]
-    inverse_mat = torch.nn.functional.pad(
+    inverse_mat = F.pad(
         inverse_mat, [0, 0, 0, 1], value=0)  # [B,4,4]
     inverse_mat[..., 3, 3] = 1.0
 

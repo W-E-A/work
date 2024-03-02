@@ -49,10 +49,10 @@ det_common_heads = dict(
 # train params
 train_batch_size = 1
 # train_batch_size = 2
-train_num_workers = 8
+train_num_workers = 80
 # train_seq_length = 100
 train_seq_length = 6
-train_present_idx = 0
+train_present_idx = 0 # 012345678910
 train_key_interval = 1
 train_co_agents = ('ego_vehicle', 'infrastructure')
 # train_co_agents = ('ego_vehicle',)
@@ -71,7 +71,7 @@ test_key_interval = 1
 test_co_agents = ('ego_vehicle', 'infrastructure')
 # test_co_agents = ('ego_vehicle',)
 test_ego_name = 'ego_vehicle'
-test_mode = 'where2comm' # full where2comm new_method single 分别为全通信，where2comm的通信，新方法通信，单车检测
+test_mode = 'single' # full where2comm new_method single 分别为全通信，where2comm的通信，新方法通信，单车检测
 test_comm_ksize = 5 # comm kernel size 通信高斯卷积核的大小，用于放大heatmap
 
 
