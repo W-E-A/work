@@ -32,10 +32,8 @@ code_size = 7
 code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 det_tasks = [
     dict(num_class=1, class_names=['car']),
-    dict(num_class=1, class_names=['van']),
-    dict(num_class=1, class_names=['truck']),
-    dict(num_class=1, class_names=['cyclist']),
-    dict(num_class=1, class_names=['motorcycle']),
+    dict(num_class=2, class_names=['van','truck']),
+    dict(num_class=2, class_names=['cyclist', 'motorcycle']),
     dict(num_class=1, class_names=['pedestrian']),
 ]
 det_common_heads = dict(
@@ -47,7 +45,7 @@ det_common_heads = dict(
 )
 
 # train params
-train_batch_size = 1
+train_batch_size = 2
 # train_batch_size = 2
 train_num_workers = 8
 # train_seq_length = 100
@@ -58,7 +56,6 @@ train_co_agents = ('ego_vehicle', 'infrastructure')
 # train_co_agents = ('ego_vehicle',)
 train_ego_name = 'ego_vehicle'
 train_mode = 'sparse_fusion' # sparse_fusion, dense_fusion, single 分别为where2comm的通信，全通信，单车检测
-# train_mode = 'dense_fusion'
 train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
 
 # test params
@@ -73,8 +70,13 @@ test_co_agents = ('ego_vehicle', 'infrastructure')
 # test_co_agents = ('ego_vehicle',)
 test_ego_name = 'ego_vehicle'
 test_mode = 'where2comm' # full where2comm new_method single 分别为全通信，where2comm的通信，新方法通信，单车检测
-# test_mode = 'full'
 test_comm_ksize = 5 # comm kernel size 通信高斯卷积核的大小，用于放大heatmap
+
+
+
+test = True # FIXME 注意训练和测试的时候需要修改，True为测试模式， False为训练模式，用于切换训练和测试的不同参数
+
+
 
 train_pipline = [
     dict(
@@ -316,15 +318,9 @@ model = dict(
         mid_channels=256,
         dense_fusion=True,
     ),
-    train_comm_expand_layer=dict(
+    comm_expand_layer=dict(
         type='GaussianConv',
-        kernel_size=train_comm_ksize,
-        sigma=1.0,
-        impl=True,
-    ),
-    test_comm_expand_layer=dict(
-        type='GaussianConv',
-        kernel_size=test_comm_ksize,
+        kernel_size=test_comm_ksize if test else train_comm_ksize,
         sigma=1.0,
         impl=True,
     ),
@@ -379,9 +375,9 @@ model = dict(
         nms_type='rotate',
         post_center_limit_range=det_center_range,
         score_threshold=0.1,
-        nms_thr=[0.1, 0.1, 0.1, 0.1, 0.1, 0.3],
-        # nms_rescale_factor=[1.0, 0.7, 0.7, 1.0, 1.0, 4.5],
-        nms_rescale_factor=[1.0, 1.0, 1.0, 2.0, 2.0, 4.5],
+        nms_thr=[0.2, 0.2, 0.2, 0.2, 0.2, 0.5],
+        nms_rescale_factor=[1.0, 0.7, 0.7, 1.0, 1.0, 4.5],
+        # nms_rescale_factor=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
         pre_max_size=1000,
         post_max_size=83,
         max_per_img=500,
@@ -393,8 +389,7 @@ model = dict(
         test_mode=test_mode,
     ),
     pts_fusion_cfg=dict(
-        train_ego_name=train_ego_name,
-        test_ego_name=test_ego_name,
+        ego_name=train_ego_name if not test else test_ego_name,
         pc_range=lidar_range,
     )
 )
@@ -412,7 +407,7 @@ default_hooks = dict(
                 runtime_info=dict(type='RuntimeInfoHook'),
                 timer=dict(type='IterTimerHook'),
                 sampler_seed=dict(type='DistSamplerSeedHook'),
-                logger=dict(type='LoggerHook', interval=40),
+                logger=dict(type='LoggerHook', interval=50),
                 param_scheduler=dict(type='ParamSchedulerHook'),
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
@@ -493,12 +488,6 @@ visualizer = dict(
     mask_range=mask_range
 )
 
-# Default setting for scaling LR automatically
-#   - `enable` means enable scaling LR automatically
-#       or not by default.
-#   - `base_batch_size` = (8 GPUs) x (4 samples per GPU).
-
-auto_scale_lr = dict(enable=False, base_batch_size=32)
 
 # dist
 find_unused_parameters = True

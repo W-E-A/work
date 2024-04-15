@@ -5,6 +5,8 @@ from mmcv.cnn import ConvModule
 import torch
 import torch.nn as nn
 from torch import Tensor
+import math
+import torch.nn.functional as F
 
 @MODELS.register_module()
 class V2XTransformerFusion(BaseModule):
@@ -41,7 +43,42 @@ class V2XTransformerFusion(BaseModule):
         ego_feats = ego_feats.permute(0, 3, 4, 1, 2).contiguous().view(B*H*W, E, C) # N E C
         agent_feats = agent_feats.permute(0, 3, 4, 1, 2).contiguous().view(B*H*W, A, C) # N A C
         all_feats = torch.cat([ego_feats, agent_feats], dim=1) # N A+E C
-        memory = self.encoder(all_feats) # N A+E C
-        result = self.decoder(ego_feats, memory) # N E C
-        result = result.view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous() # B E C H W
+
+        #ScaledDotProduct 29.7
+        sqrt_dim = math.sqrt(C)
+        score = torch.bmm(all_feats, all_feats.transpose(1, 2)) / sqrt_dim
+        attn = F.softmax(score, dim=-1)
+        result = torch.bmm(attn, all_feats) #  N A+E C
+        result = result[:,0:1,:].view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous()
         return result
+
+        #ScaledDotProductSum 27
+        # sqrt_dim = math.sqrt(C)
+        # score = torch.bmm(all_feats, all_feats.transpose(1, 2)) / sqrt_dim
+        # attn = F.softmax(score, dim=-1)
+        # result = torch.bmm(attn, all_feats) #  N A+E C
+        # result = torch.sum(result, dim=1, keepdim=True)
+        # result = result.view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous()
+        # return result
+        
+        #Sum 25
+        # result = torch.sum(all_feats, dim=1, keepdim=True)
+        # result = result.view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous() # B E C H W
+        # return result
+
+        #Origin Revise1
+        # memory = self.encoder(all_feats) # N A+E C
+        # result = torch.sum(memory, dim=1, keepdim=True)
+        # result = result.view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous() # B E C H W
+        # return result
+
+        # Origin Revise2 27
+        # result = self.encoder(all_feats) # N A+E C
+        # result = result[:,0:1,:].view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous()
+        # return result
+
+        #Origin 20
+        # memory = self.encoder(all_feats) # N A+E C
+        # result = self.decoder(ego_feats, memory) # N E C
+        # result = result.view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous() # B E C H W
+        # return result

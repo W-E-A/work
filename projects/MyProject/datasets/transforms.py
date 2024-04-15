@@ -349,16 +349,23 @@ class GatherV2XPoseInfo(BaseTransform):
         future_seq = range(seq_length)[present_idx:] # only future motion
 
         seq_pose_matrix = []
+        seq_loc_matrix = []
         for i, data_info_list in enumerate(example_seq):
             co_pose_matrix = []
+            ego_loc_matrix = []
             for j in range(co_length):
                 ego2global = np.array(data_info_list[j]['data_samples'].metainfo['ego2global'], dtype=np.float32)
                 other2global = [np.array(data_info_list[k]['data_samples'].metainfo['ego2global'], dtype=np.float32) for k in range(co_length)]
                 co_pose_matrix.append(calc_relative_pose(ego2global, other2global)) # type: ignore
+                ego_loc_matrix.append(ego2global)
             co_pose_matrix = np.stack(co_pose_matrix, axis=0)
+            ego_loc_matrix = np.stack(ego_loc_matrix, axis=0)
             seq_pose_matrix.append(co_pose_matrix)
+            seq_loc_matrix.append(ego_loc_matrix)
         seq_pose_matrix = np.stack(seq_pose_matrix, axis=0)
+        seq_loc_matrix = np.stack(seq_loc_matrix, axis=0)
         input_dict['pose_matrix'] = seq_pose_matrix # seq, co, co, 4, 4
+        input_dict['loc_matrix'] = seq_loc_matrix # seq, co, 4, 4
 
         future_motion_matrix = []
         for j in range(co_length):

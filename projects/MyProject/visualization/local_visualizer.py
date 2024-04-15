@@ -1,7 +1,7 @@
 from typing import Optional, Union, Tuple, List, Sequence
 from mmdet3d.registry import VISUALIZERS
 from mmdet3d.structures import LiDARInstance3DBoxes
-from mmengine.visualization.utils import tensor2ndarray
+from mmengine.visualization.utils import tensor2ndarray, check_type
 from mmengine.visualization.visualizer import Visualizer, VisBackendsType
 from mmengine.dist import master_only
 import numpy as np
@@ -97,12 +97,53 @@ class SimpleLocalVisualizer(Visualizer):
         bev_head_2 = tensor2ndarray(boxes.gravity_center)[..., :2] # N 2
         bev_heads = np.stack([bev_head_1, bev_head_2], axis=1) # N 2 2
         bev_corners_voxel = np.round((bev_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2
-        bev_heads_voxel = np.round((bev_heads - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2
+        bev_heads_voxel = np.round((bev_heads - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 2 2
         for c, h in zip(bev_corners_voxel, bev_heads_voxel):
             x = np.append(c[:, 0], c[0, 0])
             y = np.append(c[:, 1], c[0, 1])
             self.ax_save.plot(x, y, linewidth=2, **kwargs)
             self.ax_save.plot(h[:, 0], h[:, 1], linewidth=2, **kwargs)
+    
+    @master_only
+    def draw_points(self,
+                    positions: Union[np.ndarray, torch.Tensor],
+                    colors: Union[str, tuple, List[str], List[tuple]] = 'g',
+                    marker: Optional[str] = None,
+                    sizes: Optional[Union[np.ndarray, torch.Tensor]] = None,
+                    **kwargs):
+        check_type('positions', positions, (np.ndarray, torch.Tensor))
+        positions = tensor2ndarray(positions)
+
+        if len(positions.shape) == 1:
+            positions = positions[None]
+        assert positions.shape[-1] == 2, (
+            'The shape of `positions` should be (N, 2), '
+            f'but got {positions.shape}')
+
+        positions_voxel = np.round((positions - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 2
+
+        self.ax_save.scatter(
+            positions_voxel[:, 0], positions_voxel[:, 1], c=colors, s=sizes, marker=marker, **kwargs)
+    
+    @master_only
+    def draw_texts(
+        self,
+        texts: Union[str, List[str]],
+        positions: Union[np.ndarray, torch.Tensor],
+        **kwargs
+    ):
+        check_type('positions', positions, (np.ndarray, torch.Tensor))
+        positions = tensor2ndarray(positions)
+
+        if len(positions.shape) == 1:
+            positions = positions[None]
+        assert positions.shape[-1] == 2, (
+            'The shape of `positions` should be (N, 2), '
+            f'but got {positions.shape}')
+
+        positions_voxel = np.round((positions - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 2
+
+        super().draw_texts(texts, positions_voxel, **kwargs)
 
     @master_only
     def draw_bev_feat(self, feat: Tensor, **kwargs):
@@ -112,3 +153,6 @@ class SimpleLocalVisualizer(Visualizer):
     def just_save(self, save_path: str = "./bev_points.png"):
         self.fig_save.savefig(save_path, bbox_inches='tight', pad_inches=0) # type: ignore
 
+    @master_only
+    def clean(self):
+        self.ax_save.cla()

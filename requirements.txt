@@ -13,7 +13,7 @@ mmengine>=0.7.1,<1.0.0
 networkx>=2.5
 numba # you should install numba==0.53.0 if your environment is cuda-9.0
 numpy
-open3d
+# open3d
 plyfile
 scikit-image
 # by default we also use tensorboard to log results

@@ -21,7 +21,8 @@ class ProjectModel(MVXTwoStageDetector):
                  pts_neck: Optional[dict] = None,
                  temporal_backbone: Optional[dict] = None,
                  multi_task_head: Optional[dict] = None,
-                 comm_expand_layer: Optional[dict] = None,
+                 train_comm_expand_layer: Optional[dict] = None,
+                 test_comm_expand_layer: Optional[dict] = None,
                  pts_train_cfg: Optional[dict] = None,
                  pts_test_cfg: Optional[dict] = None,
                  pts_fusion_cfg: Optional[dict] = None,
@@ -49,8 +50,11 @@ class ProjectModel(MVXTwoStageDetector):
             self.multi_task_head = MODELS.build(multi_task_head)
             self.fusion_multi_task_head = MODELS.build(multi_task_head)
         
-        if comm_expand_layer:
-            self.comm_expand_layer = MODELS.build(comm_expand_layer)
+        if train_comm_expand_layer:
+            self.train_comm_expand_layer = MODELS.build(train_comm_expand_layer)
+        
+        if test_comm_expand_layer:
+            self.test_comm_expand_layer = MODELS.build(test_comm_expand_layer)
 
         if self.pts_train_cfg:
             self.gather_task_loss = self.pts_train_cfg.get('gather_task_loss', True) # type: ignore
@@ -63,13 +67,14 @@ class ProjectModel(MVXTwoStageDetector):
             assert self.test_mode in ('full', 'where2comm', 'new_method', 'single')
         
         if self.pts_fusion_cfg:
-            self.ego_name = self.pts_fusion_cfg.get("ego_name", "ego_vehicle")
+            self.train_ego_name = self.pts_fusion_cfg.get("train_ego_name", "ego_vehicle")
+            self.test_ego_name = self.pts_fusion_cfg.get("test_ego_name", "ego_vehicle")
             self.pc_range = self.pts_fusion_cfg.get("pc_range", [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0])
             self.warp_size = (self.pc_range[3], self.pc_range[4])
         
         self.comm_rate = 0.0
         self.comm_count = 0
-
+    
     def extract_pts_feat(
             self,
             voxel_dict: Dict[str, Tensor],
@@ -185,6 +190,10 @@ class ProjectModel(MVXTwoStageDetector):
         # seq_timestamps = scene_info[0].seq_timestamps
         # seq_length = scene_info[0].seq_length
         batch_size = len(scene_info)
+        if mode == 'loss':
+            self.ego_name = self.train_ego_name
+        else:
+            self.ego_name = self.test_ego_name
         self.ego_id = co_agents.index(self.ego_name)
         assert mode in ('loss', 'predict')
 
@@ -274,7 +283,7 @@ class ProjectModel(MVXTwoStageDetector):
         if (mode == 'loss' and self.train_mode != 'single') or mode == 'predict':
             ego_coop_samples = agent_batch_samples[self.ego_id*batch_size : (self.ego_id+1)*batch_size] # fetch ego coop bboxes
             ego_coop_input_metas = [samples.metainfo for samples in ego_coop_samples] # 1*B
-            ego_coop_instances = [samples.gt_instances_3d for samples in ego_coop_samples] # 1*B # raw all instances
+            ego_coop_instances = [samples.gt_instances_3d for samples in ego_coop_samples] # 1*B
             for b in range(batch_size):
                 ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
             for j in range(co_length):
@@ -344,7 +353,7 @@ class ProjectModel(MVXTwoStageDetector):
                         torch.zeros_like(heatmaps, device=get_device()),
                     ) # AB 1 H W
 
-                    comm_masks = self.comm_expand_layer(comm_masks) # AB 1 H W # type: ignore
+                    comm_masks = self.train_comm_expand_layer(comm_masks) # AB 1 H W # type: ignore
                 ################################ SHOW SPARSE TRAIN (COMM) MASK ################################
                 # import os
                 # os.makedirs('./data/step_vis_data', exist_ok=True)
@@ -426,7 +435,7 @@ class ProjectModel(MVXTwoStageDetector):
                         torch.zeros_like(heatmaps, device=get_device()),
                     ) # AB 1 H W
 
-                    comm_masks = self.comm_expand_layer(comm_masks) # AB 1 H W # type: ignore
+                    comm_masks = self.test_comm_expand_layer(comm_masks) # AB 1 H W # type: ignore
                     ################################ SHOW SPARSE TEST WHERE2COMM (COMM) MASK ################################
                     # import os
                     # os.makedirs('./data/step_vis_data', exist_ok=True)
@@ -452,7 +461,7 @@ class ProjectModel(MVXTwoStageDetector):
                     torch.zeros_like(relamaps, device=get_device()),
                 ) # AB 1 H W
 
-                comm_masks = self.comm_expand_layer(comm_masks) # AB 1 H W # type: ignore
+                comm_masks = self.test_comm_expand_layer(comm_masks) # AB 1 H W # type: ignore
                 ################################ SHOW SPARSE TEST NEW_METHOD (COMM) MASK ################################
                 # import os
                 # os.makedirs('./data/step_vis_data', exist_ok=True)
@@ -486,16 +495,17 @@ class ProjectModel(MVXTwoStageDetector):
                 print(self.comm_rate / self.comm_count)
         else:
             self.comm_rate = 0.0
-            print(self.comm_rate)
+            # print(self.comm_rate)
 
         agent_comm_features = agent_fusion_features * agent_fusion_masks # A-1 B C H W # type: ignore
-
+            
         agent_warpped_comm_features = []
         for b in range(batch_size):
             present_pose_matrix = scene_info[b].pose_matrix[present_idx, indices, self.ego_id, ...] # use ego to other1, other2, ... # type: ignore
             agent_comm_feat = agent_comm_features[:, b] # A-1, C, H, W
             warp_comm_feat = warp_features(agent_comm_feat, present_pose_matrix, self.warp_size) # A-1 C H W
             agent_warpped_comm_features.append(warp_comm_feat)
+                
         ################################ SHOW WARPPED FEATURE ################################
         # import os
         # os.makedirs('./data/step_vis_data', exist_ok=True)
@@ -515,7 +525,6 @@ class ProjectModel(MVXTwoStageDetector):
         #     return []
         ################################ SHOW WARPPED FEATURE ################################
         agent_warpped_comm_features = torch.stack(agent_warpped_comm_features, dim=0) # B A-1 C H W
-
         # coop send and receive
         ego_fusion_features = ego_fusion_features.unsqueeze(1) # B 1 C H W # type: ignore
         ego_fusion_result = self.pts_fusion_layer(ego_fusion_features, agent_warpped_comm_features).squeeze(1) # B C H W
@@ -524,18 +533,17 @@ class ProjectModel(MVXTwoStageDetector):
         coop_instances = []
         for instance in ego_coop_instances: # type: ignore
             coop_instances.append(instance[instance.coop_isvalid])
-
+        
         if mode == 'predict' and self.test_mode != 'single':
             batch_other_impo_instances = []
-            for b in range(batch_size):
-                inv_present_pose_matrix = scene_info[b].pose_matrix[present_idx, self.ego_id, indices, ...] # use other1, other2, ... to ego # type: ignore
-                other_visible_instances = [agent_batch_visible_instances[idx*batch_size + b] for idx in indices] # type: ignore
-                other_impo_instances = [instance[instance.importance] for instance in other_visible_instances] # importance A-1
-                for idx, _ in enumerate(indices): #type: ignore
-                    trans = inv_present_pose_matrix[idx]
-                    other_impo_instances[idx].bboxes_3d.rotate(trans[:3, :3].T, None)
-                    other_impo_instances[idx].bboxes_3d.translate(trans[:3, 3])
-                batch_other_impo_instances.append(InstanceData.cat(other_impo_instances)) # type: ignore
+            inv_present_pose_matrix = scene_info[b].pose_matrix[present_idx, self.ego_id, indices, ...] # use other1, other2, ... to ego # type: ignore
+            other_visible_instances = [agent_batch_visible_instances[idx*batch_size + b] for idx in indices] # type: ignore
+            other_impo_instances = [instance[instance.importance] for instance in other_visible_instances] # importance A-1
+            for idx, _ in enumerate(indices): #type: ignore
+                trans = inv_present_pose_matrix[idx]
+                other_impo_instances[idx].bboxes_3d.rotate(trans[:3, :3].T, None)
+                other_impo_instances[idx].bboxes_3d.translate(trans[:3, 3])
+            batch_other_impo_instances.append(InstanceData.cat(other_impo_instances)) # type: ignore
         
         if mode == 'loss':
             loss_dict = {}
@@ -561,7 +569,7 @@ class ProjectModel(MVXTwoStageDetector):
 
         elif mode == 'predict':
             ret_list = []
-            predict_dict = self.fusion_multi_task_head.predict(coop_head_feat_dict,  ego_coop_input_metas) # type: ignore
+            predict_dict = self.fusion_multi_task_head.predict(coop_head_feat_dict, ego_coop_input_metas) # type: ignore
 
             ego_visible_instances = []
             for instance in ego_coop_instances: # type: ignore
@@ -611,30 +619,30 @@ class ProjectModel(MVXTwoStageDetector):
                     sample.pred_instances_3d = pred_result[b]
                     ret_list.append(sample)
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
-                # import os
-                # os.makedirs('./data/step_vis_data', exist_ok=True)
-                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
-                # coop_instances_ori = agent_batch_visible_instances[self.ego_id * batch_size: (self.ego_id + 1)*batch_size]
-                # for idx, result in enumerate(ret_list):
-                #     visualizer.set_points_from_npz(result.lidar_path)
+                import os
+                os.makedirs('./data/step_vis_data', exist_ok=True)
+                visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                coop_instances_ori = agent_batch_visible_instances[self.ego_id * batch_size: (self.ego_id + 1)*batch_size]
+                for idx, result in enumerate(ret_list):
+                    visualizer.set_points_from_npz(result.lidar_path)
 
 
-                #     # 用于协同的可视化
-                #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#FFFF00')
-                #     visualizer.draw_bev_bboxes(coop_instances_ori[idx].bboxes_3d, c='#00FF00')
+                    # 用于协同的可视化
+                    visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#FFFF00')
+                    visualizer.draw_bev_bboxes(coop_instances_ori[idx].bboxes_3d, c='#00FF00')
 
-                #     # 用于经过new_method的可视化
-                #     # visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
+                    # 用于经过new_method的可视化
+                    # visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
 
 
-                #     visualizer.draw_bev_bboxes(batch_other_impo_instances[idx].bboxes_3d, c='#00BFFF') # type: ignore
-                #     thres = self.score_threshold
-                #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
-                #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
-                #     visualizer.just_save(f'./data/step_vis_data/coop_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+                    visualizer.draw_bev_bboxes(batch_other_impo_instances[idx].bboxes_3d, c='#00BFFF') # type: ignore
+                    thres = self.score_threshold
+                    result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
+                    visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
+                    visualizer.just_save(f'./data/step_vis_data/coop_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
 
-                # import pdb
-                # pdb.set_trace()
+                import pdb
+                pdb.set_trace()
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
             return ret_list # type: ignore
         

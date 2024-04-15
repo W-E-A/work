@@ -4,6 +4,8 @@ from mmengine.model.base_module import BaseModule
 from mmdet3d.models.middle_encoders.pillar_scatter import PointPillarsScatter
 import math
 import torch
+import math
+torch.pi = math.pi
 import torch.nn as nn
 
 @MODELS.register_module()

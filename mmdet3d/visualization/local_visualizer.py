@@ -30,12 +30,12 @@ from mmdet3d.structures import (BaseInstance3DBoxes, Box3DMode,
 from .vis_utils import (proj_camera_bbox3d_to_img, proj_depth_bbox3d_to_img,
                         proj_lidar_bbox3d_to_img, to_depth_mode)
 
-try:
-    import open3d as o3d
-    from open3d import geometry
-    from open3d.visualization import Visualizer
-except ImportError:
-    o3d = geometry = Visualizer = None
+# try:
+#     import open3d as o3d
+#     from open3d import geometry
+#     from open3d.visualization import Visualizer
+# except ImportError:
+o3d = geometry = Visualizer = None
 
 
 @VISUALIZERS.register_module()

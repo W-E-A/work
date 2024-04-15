@@ -68,7 +68,7 @@ def get_deepaccident_2d_boxes(ori_info_dict, metainfo, cam_info, visibilities: L
         with_yaw=True,
         origin=(0.5, 0.5, 0.5)
     )
-    gt_boxes.convert_to(Box3DMode.CAM, lidar_to_camera_matrix, True)
+    gt_boxes = gt_boxes.convert_to(Box3DMode.CAM, lidar_to_camera_matrix, True)
     gt_corners = gt_boxes.corners.cpu().numpy().transpose(0, 2, 1) # [N, 3, 8]
     gt_boxes = gt_boxes.tensor.cpu().numpy() # [N, 7]
     gt_names = ori_info_dict['gt_names']

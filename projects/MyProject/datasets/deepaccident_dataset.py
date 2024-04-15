@@ -16,6 +16,8 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
     'co_agents', 'scene_length', 'scene_timestamps', 'sample_idx',
     'seq_timestamps', 'co_length',
     ])
+
+    对于数据生成标明有场景来源，代理列表，序列长度，序列时间戳的数据
     
     """
     METAINFO = {
@@ -124,7 +126,7 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
                 gt_bboxes_3d = ann_info['gt_bboxes_3d']
                 gt_velocities = ann_info['velocities']
                 nan_mask = np.isnan(gt_velocities[:, 0])
-                gt_velocities[nan_mask] = [0.0, 0.0]
+                gt_velocities[nan_mask] = np.array([0.0, 0.0])
                 gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocities], axis=-1) # 7 + 2
                 ann_info['gt_bboxes_3d'] = gt_bboxes_3d
             else:

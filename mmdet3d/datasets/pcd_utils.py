@@ -7,7 +7,7 @@
 Utility functions related to point cloud
 """
 
-import open3d as o3d
+# import open3d as o3d
 import numpy as np
 from pypcd import pypcd
 
