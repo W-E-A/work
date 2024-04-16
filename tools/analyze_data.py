@@ -89,6 +89,7 @@ class CorrelationFilter(BaseTransform):
         alpha_coeff: float = 1,
         visualizer_cfg: dict = None,
         just_save_root: str = None,
+        increment_save: bool = True,
         verbose: bool = False
     ) -> None:
         # self.pc_range = pc_range
@@ -106,6 +107,7 @@ class CorrelationFilter(BaseTransform):
             self.visualizer: SimpleLocalVisualizer = VISUALIZERS.build(visualizer_cfg)
             assert just_save_root != None
         self.just_save_root = just_save_root
+        self.increment_save = increment_save
         self.verbose = verbose
 
         # self.voxel_size = np.array(self.voxel_size).astype(np.float32)
@@ -139,7 +141,7 @@ class CorrelationFilter(BaseTransform):
         #     'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
         # ]
 
-    def linear_correlation_score(self,
+    def linear_motion_score(self,
             ego_center: np.ndarray,
             target_center: np.ndarray,
             min_distance_thres: float,
@@ -153,7 +155,7 @@ class CorrelationFilter(BaseTransform):
         
         encounter_distance = np.linalg.norm(ego_center - target_center, axis=1)
         encounter_distance = np.clip(encounter_distance, min_distance_thres, max_distance_thres)
-        base_score = np.interp(encounter_distance, [min_distance_thres, max_distance_thres], [1, 1e-4])
+        base_score = np.interp(encounter_distance, [min_distance_thres, max_distance_thres], [1, 1e-6])
         time_decay_coeff = np.exp(-alpha_coeff * np.linspace(0, 1, len(base_score)))
         time_decay_coeff = time_decay_coeff / np.sum(time_decay_coeff)
         decay_score = time_decay_coeff * base_score
@@ -178,6 +180,7 @@ class CorrelationFilter(BaseTransform):
 
 
     def transform(self, input_dict):
+        sample_idx = input_dict['sample_idx']
         present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
         seq_length = input_dict['seq_length'] # 当前序列长度，比如6
         scene_name = input_dict['scene_name'] # 序列所属场景
@@ -188,12 +191,18 @@ class CorrelationFilter(BaseTransform):
         future_length = len(future_seq_timestamps) # 表明未来帧的长度，比如3
         future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
         future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
-        # future_loc_matrix = input_dict['loc_matrix'][present_idx:, ...] # x c 4 4 # 未来帧ego的实际位置
+        future_loc_matrix = input_dict['loc_matrix'][:, present_idx:, ...] # c x 4 4 # 未来帧ego的实际位置
+
+        if self.verbose:
+            log(scene_name)
+            log(input_dict['seq_timestamps'])
 
         co_agents = {v : k for k, v in enumerate(co_agents)} # str : int
 
         assert self.ego_name in co_agents and self.ego_name != 'infrastructure'
         track_map_list = []
+        if self.with_velocity:
+            global_vel_list = [] # 其他代理的速度
         for agent, j in co_agents.items():
             if agent == self.ego_name:
                 # 如果处理的是ego则先得到ego的规划轨迹和关键帧相对于其他协同对象的变换矩阵
@@ -201,19 +210,26 @@ class CorrelationFilter(BaseTransform):
                 present_trans_matrix = future_pose_matrix[0, :, j] # c 4 4
                 present_trans_matrix = np.delete(present_trans_matrix, j, axis=0) # ego to [ego, other, ...] at present c-1 4 4
                 if self.with_velocity:
+                    ego_present_vel = np.array(
+                        [example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_x'],
+                         example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_y']],
+                         dtype=np.float32
+                    )
+                    if self.verbose:
+                        log(f"ego : {ego_present_vel}")
                     # ego2globals = []
-                    ego_global_vels = []
-                    for i, timestamp in enumerate(future_seq_timestamps):
-                        ego_global_vels.append([
-                            example_seq[timestamp][j]['data_samples'].metainfo['vehicle_speed_x'],
-                            example_seq[timestamp][j]['data_samples'].metainfo['vehicle_speed_y']
-                        ])
+                    # ego_global_vels = []
+                    # for i, timestamp in enumerate(future_seq_timestamps):
+                    #     ego_global_vels.append([
+                    #         example_seq[timestamp][j]['data_samples'].metainfo['vehicle_speed_x'],
+                    #         example_seq[timestamp][j]['data_samples'].metainfo['vehicle_speed_y']
+                    #     ])
                         # ego2globals.append(np.linalg.inv(np.array(example_seq[timestamp][j]['data_samples'].metainfo['ego2global'])))
-                    ego_global_vels = np.array(ego_global_vels, dtype=np.float32) # N, 2
+                    # ego_global_vels = np.array(ego_global_vels, dtype=np.float32) # N, 2
                     # ego2globals_rots = np.array(ego2globals, dtype=np.float32) # N, 4, 4
                     # motion_rots = ego_motion_matrix[:, :3, :3]
-                    global2ego_prescent_rots = np.linalg.inv(np.array(example_seq[present_idx][j]['data_samples'].metainfo['ego2global'], dtype=np.float32))[:2, :2]
-                    ego_present_vels = ego_global_vels @ global2ego_prescent_rots.T # N, 2 ego的序列速度同一相对于present的结果
+                    # global2ego_prescent_rots = np.linalg.inv(np.array(example_seq[present_idx][j]['data_samples'].metainfo['ego2global'], dtype=np.float32))[:2, :2]
+                    # ego_present_vels = ego_global_vels @ global2ego_prescent_rots.T # N, 2 ego的序列速度同一相对于present的结果
 
             else:
                 # 如果处理的是协同代理，则对于每个代理在时序上跟踪所有目标，相对于关键帧的轨迹，每个代理得到一个track_map
@@ -234,13 +250,15 @@ class CorrelationFilter(BaseTransform):
                     lidar2agent = np.array(example_seq[timestamp][j]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) # type: ignore
                     agent2present = future_motion_matrix[j][i]
                     lidar2present = lidar2agent @ agent2present
+                    if self.with_velocity:
+                        target_global_vel = gt_instances_3d.bboxes_3d.tensor[:, -2:].numpy() # origin vel
                     gt_instances_3d.bboxes_3d.rotate(lidar2present[:3, :3].T, None)
                     gt_instances_3d.bboxes_3d.translate(lidar2present[:3, 3]) # valid boxes to present
                     
                     for idx, id in enumerate(gt_instances_3d.track_id):
                         bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # agent坐标系下其他目标的present的中心
                         if self.with_velocity:
-                            bboxes_vel = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[-2:] # agent坐标系下其他目标的present的速度
+                            bboxes_vel = target_global_vel[idx] # agent坐标系下其他目标的present的速度
                         labels = gt_instances_3d.labels_3d[idx]
                         if id not in track_map:
                             track_map[id] = {
@@ -255,6 +273,13 @@ class CorrelationFilter(BaseTransform):
                             track_map[id]['vel'].append(bboxes_vel)
                 track_map_list.append(track_map)
 
+                if self.with_velocity:
+                    global_vel_list.append(np.array(
+                        [example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_x'],
+                         example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_y']],
+                         dtype=np.float32
+                    ))
+
         ego_dix = co_agents.pop(self.ego_name) # ignore the ego
 
         for i, (agent, j) in enumerate(co_agents.items()): # agent
@@ -265,8 +290,8 @@ class CorrelationFilter(BaseTransform):
             rela_matrix = np.stack([trans @ ego_motion_matrix[k] for k in range(future_length)], axis=0) # type: ignore
             rela_centers = rela_matrix[:, :2, 3] # x 2
             if self.with_velocity:
-                rots = trans[:2, :2]
-                rela_vels = ego_present_vels @ rots.T # N, 2
+                rots = np.linalg.inv(future_loc_matrix[j, 0, ...])[:2, :2] # 世界相对于代理的rot
+                rela_vel = (ego_present_vel - global_vel_list[i]) @ rots.T # N, 2 绝对速度 - 牵连速度 = 相对速度，相对速度在代理处的表达
 
             if self.visualizer:
                 # rela_centers_vis = rela_centers @ self.scatter_trans.T # type: ignore
@@ -280,30 +305,31 @@ class CorrelationFilter(BaseTransform):
                 start = v['start'] # 开始跟踪的时间戳
                 centers = np.stack(v['center'], axis=0) # N, 2 # 轨迹中心点
                 cmp_centers = rela_centers[start:start + len(centers)] # N, 2 这里保证ego是从头开始的，因此在有效预测目标轨迹的时间段对比
-                cmp_vels = rela_vels[start:start + len(centers)] # N, 2
-                correlation_score = 0
+                correlation_score = 1e-6
+                motion_score = self.linear_motion_score(
+                    cmp_centers, centers, self.min_distance_thres, self.max_distance_thres, self.alpha_coeff
+                )
                 if self.with_velocity:
-                    vels = np.stack(v['vel'], axis=0) # N, 2
-                    correlation_score = self.linear_correlation_score(
-                        cmp_centers, centers, self.min_distance_thres, self.max_distance_thres, self.alpha_coeff
-                    )
-                    potential_score = self.potential_score(
-                        cmp_centers[0], cmp_vels[0], centers[0], vels[0] # N, 2 -> present frame info for potential score
-                    )
-                    correlation_score = correlation_score * potential_score
+                    potential_score = 1e-6
+                    if start == 0: # 忽略当前之后再出现的目标的速度
+                        vel = v['vel'][start]
+                        if self.verbose:
+                            log(f"{id} : {vel}")
+                        vel = (vel - global_vel_list[i]) @ rots.T # 目标相对于代理的速度，然后在代理处的表达
+                        potential_score = self.potential_score(
+                            cmp_centers[0], rela_vel, centers[0], vel # N, 2 -> present frame info for potential score
+                        )
+                        correlation_score = motion_score * potential_score
                 else:
-                    correlation_score = self.linear_correlation_score(
-                        cmp_centers, centers, self.min_distance_thres, self.max_distance_thres, self.alpha_coeff
-                    )
-
-                vel_vector = np.stack([centers[0], centers[0] + 0.5 * vels[0]]) # 2, 2
-                cmp_vel_vector = np.stack([cmp_centers[0], cmp_centers[0] + 0.5 * cmp_vels[0]]) # 2, 2
-
+                    correlation_score = motion_score
                 result_dict[id] = correlation_score
 
                 if self.visualizer:
-                    self.visualizer.draw_points(vel_vector, colors='r', sizes = 100)
-                    self.visualizer.draw_points(cmp_vel_vector, colors='g', sizes = 100)
+                    if self.with_velocity:
+                        cmp_vel_vector = np.stack([cmp_centers[0], cmp_centers[0] + 0.5 * rela_vel]) # 2, 2
+                        vel_vector = np.stack([centers[0], centers[0] + 0.5 * vel]) # 2, 2
+                        self.visualizer.draw_points(vel_vector, colors='r', sizes = 100)
+                        self.visualizer.draw_points(cmp_vel_vector, colors='g', sizes = 100)
                     # centers_vis = centers @ self.scatter_trans.T # type: ignore
                     self.visualizer.draw_points(centers, colors=np.linspace(0.0, 1.0, len(centers))[::-1], sizes = 40, cmap='Greens')
             
@@ -318,15 +344,25 @@ class CorrelationFilter(BaseTransform):
                     correlation_scores_str,
                     present_instances_3d.bboxes_3d.gravity_center[..., :2],
                     font_sizes = 15,
-                    colors = 'orange',
-                    vertical_alignments = 'center',
-                    horizontal_alignments = 'center')
+                    colors = 'yellow',
+                    vertical_alignments = 'top',
+                    horizontal_alignments = 'left')
+                self.visualizer.draw_texts(
+                    present_instances_3d.track_id.tolist(),
+                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                    font_sizes = 15,
+                    colors = 'yellow',
+                    vertical_alignments = 'bottom',
+                    horizontal_alignments = 'right')
 
                 if self.verbose:
                     log(result_dict)
                     log(correlation_scores)
                     log(agent)
-                self.visualizer.just_save(os.path.join(self.just_save_root, f"in_{agent}_{time.time_ns()}.png"))
+                if self.increment_save:
+                    self.visualizer.just_save(os.path.join(self.just_save_root, f"in_{agent}_{time.time_ns()}.png"))
+                else:
+                    self.visualizer.just_save(os.path.join(self.just_save_root, f"in_{agent}.png"))
                 self.visualizer.clean()
 
         example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d['correlation'] = \
@@ -334,7 +370,6 @@ class CorrelationFilter(BaseTransform):
         input_dict['example_seq'] = example_seq
 
         return input_dict
-
 
 def analyze_data(cfg, save_path, verbose):
     train_dataset_cfg = cfg.train_dataloader.dataset
@@ -366,7 +401,7 @@ def analyze_data(cfg, save_path, verbose):
         vehicle_id_list = [0, 1, 2],
         ego_id = -100,
         min_distance_thres = 0.5,
-        max_distance_thres = 70,
+        max_distance_thres = 15,
         alpha_coeff = 1,
         visualizer_cfg = dict(
             type='SimpleLocalVisualizer',
@@ -375,18 +410,22 @@ def analyze_data(cfg, save_path, verbose):
             name='visualizer',
         ),
         just_save_root = save_path,
+        increment_save = True,
         verbose = verbose
     )
     scene_pipline.insert(1, correlation_filter_cfg)
     dataset_cfg.scene_pipline = scene_pipline
 
     dataset = build_dataset_like_runner(dataset_cfg)
+
     dataset_len = len(dataset)
-
     for i in range(dataset_len):
-        seq_data = dataset[i]
+        _ = dataset[i]
 
-        if i > 40:
+        import pdb
+        pdb.set_trace()
+
+        if i > 60:
             break
     
 def main():

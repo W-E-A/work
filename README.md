@@ -58,6 +58,11 @@ python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-i
 #     ├── meta
 #     ├── other_vehicle
 #     └── other_vehicle_behind
+
+# analyze data
+python tools/analyze_data.py /path/to/config --mode analyze_data --verbose
+# python tools/analyze_data.py projects/MyProject/configs/exp1.py --mode analyze_data --verbose
+
 ```
 
 ## Structure

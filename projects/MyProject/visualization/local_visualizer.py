@@ -149,7 +149,7 @@ class SimpleLocalVisualizer(Visualizer):
     def draw_bev_feat(self, feat: Tensor, **kwargs):
         self.set_image(self.draw_featmap(feat, **kwargs))
 
-    @master_only
+    # @master_only
     def just_save(self, save_path: str = "./bev_points.png"):
         self.fig_save.savefig(save_path, bbox_inches='tight', pad_inches=0) # type: ignore
 
