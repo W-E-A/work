@@ -2,68 +2,9 @@
 
 ### **基于预测引导的车路协同感知**
 
-## Command
+## TODO
 
-```Bash
-# train without checkpoint (DDP mode recommended)
-nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch &
-
-# train with checkpoint (DDP mode recommended)
-nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch --checkpoint /ai/volume/work/work_dirs/exp1/single_epoch_20.pth &
-
-# test a checkpoint (Please modify the config file first)
-python tools/test_v2x.py projects/MyProject/configs/exp1.py work_dirs/exp1/epoch_20.pth --work-dir work_dirs/uni_temppp
-
-#create data
-# dair-v2x-c
-python tools/create_data.py dair-v2x --root-path /path/to/dataset --version c --out-dir ./data/dair
-# deepaccident
-python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident
-# deepaccident 文件结构：
-# .
-# ├── DeepAccident_mini
-# │   ├── type1_subtype1_accident
-# │   ├── type1_subtype1_normal
-# │   ├── type1_subtype2_accident
-# │   └── type1_subtype2_normal
-# ├── split_txt_files
-# │   ├── test.txt
-# │   ├── train.txt
-# │   └── val.txt
-# ├── type1_subtype1_accident
-# │   ├── ego_vehicle
-# │   ├── ego_vehicle_behind
-# │   ├── infrastructure
-# │   ├── meta
-# │   ├── other_vehicle
-# │   └── other_vehicle_behind
-# ├── type1_subtype1_normal
-# │   ├── ego_vehicle
-# │   ├── ego_vehicle_behind
-# │   ├── infrastructure
-# │   ├── meta
-# │   ├── other_vehicle
-# │   └── other_vehicle_behind
-# ├── type1_subtype2_accident
-# │   ├── ego_vehicle
-# │   ├── ego_vehicle_behind
-# │   ├── infrastructure
-# │   ├── meta
-# │   ├── other_vehicle
-# │   └── other_vehicle_behind
-# └── type1_subtype2_normal
-#     ├── ego_vehicle
-#     ├── ego_vehicle_behind
-#     ├── infrastructure
-#     ├── meta
-#     ├── other_vehicle
-#     └── other_vehicle_behind
-
-# analyze data
-python tools/analyze_data.py /path/to/config --mode analyze_data --verbose
-# python tools/analyze_data.py projects/MyProject/configs/exp1.py --mode analyze_data --verbose
-
-```
+- [] 修改`FIXME`内容
 
 ## Structure
 
@@ -85,6 +26,70 @@ python tools/analyze_data.py /path/to/config --mode analyze_data --verbose
 
 ## Get Started
 
+`pip install -r requirements.txt`
+
+```Bash
+git clone https://github.com/klintan/pypcd.git
+cd pypcd
+python setup.py install
+```
+
+```Bash
+cd thirdpart
+unzip ./*
+cd pypcd
+python setup.py install
+```
+
 基于`mmdet3d v1.3.0`，环境要求位于`requirements.txt`中。
 
 **注意，如果系统环境中同时存在多个版本的`mmdet3d`，注意在使用前于项目根目录运行 `pip install -e .`**
+
+## Command
+
+```Bash
+# debug
+python tools/train_v2x.py projects/MyProject/configs/exp_new_1.py
+
+# train without checkpoint (DDP mode recommended)
+nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch &
+
+# train with checkpoint (DDP mode recommended)
+nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch --checkpoint /ai/volume/work/work_dirs/exp1/single_epoch_20.pth &
+
+# test a checkpoint (Please modify the config file first)
+python tools/test_v2x.py projects/MyProject/configs/exp1.py work_dirs/exp1/epoch_20.pth --work-dir work_dirs/uni_temppp
+
+#create data
+# dair-v2x-c
+python tools/create_data.py dair-v2x --root-path /path/to/dataset --version c --out-dir ./data/dair
+# deepaccident
+python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident
+# python tools/create_data.py deepaccident --root-path /mnt/auto-labeling/wyc/datasets --sample-interval 5 --out-dir ./data/deepaccident
+# deepaccident 文件结构：
+# .
+# ├── DeepAccident_mini
+# │   ├── ......
+# ├── split_txt_files
+# │   ├── test.txt
+# │   ├── train.txt
+# │   └── val.txt
+# ├── type1_subtype1_accident
+# │   ├── ego_vehicle
+# │   ├── ego_vehicle_behind
+# │   ├── infrastructure
+# │   ├── meta
+# │   ├── other_vehicle
+# │   └── other_vehicle_behind
+# ├── type1_subtype1_normal
+# │   ├── ......
+# ├── type1_subtype2_accident
+# │   ├── ......
+# └── type1_subtype2_normal
+#     ├── ......
+
+# analyze data
+python tools/analyze_data.py /path/to/config --mode analyze_data --verbose
+# python tools/analyze_data.py projects/MyProject/configs/exp1.py --mode analyze_data --verbose
+
+```

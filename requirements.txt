@@ -13,6 +13,8 @@ mmengine>=0.7.1,<1.0.0
 networkx>=2.5
 numba # you should install numba==0.53.0 if your environment is cuda-9.0
 numpy
+Cython
+python-lzf
 # open3d
 plyfile
 scikit-image

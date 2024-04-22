@@ -8,8 +8,6 @@ import numpy as np
 import multiprocessing as mp
 import threading
 import queue
-from tqdm import tqdm
-from time import sleep
 
 deepaccident_categories = ('car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian')
 deepaccident_folder_struct = ('split_txt_files', 'type1_subtype1_accident', 'type1_subtype1_normal', 'type1_subtype2_accident', 'type1_subtype2_normal')
@@ -45,16 +43,33 @@ def _read_list_file(root_path, prefix, ext = '.txt', split = ''):
     return items
 
 
-def _process_target_items(target_items_subset, data_path, load_anno, sample_interval, pos, num_threads: int = 2):
+def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool = True):
+    result = []
     total_scene_name = []
-    for scenario_type, scenario in tqdm(target_items_subset, desc=f"preparing - {pos}", position=pos, leave=False):
+    for scenario_type, scenario in mmengine.track_iter_progress(target_items):
         total_scene_name.append('_'.join([scenario_type,scenario.split('_')[0], scenario.split('_')[-1]]))
     scene_data = {scene_name : {agent : [] for agent in agent_names} for scene_name in total_scene_name}
-    for scenario_type, scenario in tqdm(target_items_subset, desc=f"processing - {pos}", position=pos, leave=False):
+    if load_anno:
+        # correct the velocity
+        sample_dt = 0.1
+
+    # num_processes = 4
+    # target_items_split = [target_items[i::num_processes] for i in range(num_processes)]
+    # manager = mp.Manager()
+    # scene_data = manager.dict(scene_data)
+
+
+
+    # with mp.Pool(processes=num_processes) as pool:
+    #     pool.starmap(process_target_items, [(target_items_subset, scene_data) for target_items_subset in target_items_split])
+
+
+    i = 0
+    for scenario_type, scenario in mmengine.track_iter_progress(target_items[:10]):
         assert scenario_type in scenario_types
         seq = [
             (int(osp.basename(frame).split('.')[0].split('_')[-1]), osp.basename(frame).split('.')[0])
-            for frame in glob(osp.join(data_path,scenario_type,'ego_vehicle','label',scenario,'*'))]
+              for frame in glob(osp.join(data_path,scenario_type,'ego_vehicle','label',scenario,'*'))]
         seq.sort(key= lambda x: x[0])
         last_seq_idx = seq[-1][0]
         filtered_seq = [frame[1] for frame in seq]
@@ -197,29 +212,121 @@ def _process_target_items(target_items_subset, data_path, load_anno, sample_inte
 
         # 等待所有任务完成
         task_queue.join()
-    
-    return scene_data
 
+        # serial
 
-def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool = True):
-    result = []
-    if load_anno:
-        # correct the velocity
-        sample_dt = 0.1
+        # for agent in agent_names:
+        #     for frame in filtered_seq:
+                
+        #         calib_path = osp.join(data_path,scenario_type,agent,'calib',scenario,frame+contents['calib'])
+        #         calib_dict = mmengine.load(calib_path)
 
-    # parellel
+        #         cams = {}
+        #         cam_name = [name for name in contents.keys() if name.startswith('Camera')]
+        #         for name in cam_name:
+        #             cam_info = {}
+        #             cam_info['type'] = name
+        #             cam_info['data_path'] = osp.join(osp.abspath(data_path),scenario_type,agent,name,scenario,frame+contents[name])
+        #             cam_info['lidar_to_camera_matrix'] = calib_dict['lidar_to_'+name]
+        #             camera_to_lidar_matrix = np.linalg.inv(calib_dict['lidar_to_'+name])
+        #             cam_info['camera_to_lidar_matrix'] = camera_to_lidar_matrix
+        #             cam_info['camera_to_ego_matrix'] = calib_dict['lidar_to_ego'] @ camera_to_lidar_matrix
+        #             cam_info['ego_to_world_matrix'] = calib_dict['ego_to_world']
+        #             cam_info['cam_intrinsic'] = calib_dict['intrinsic_'+name]
+        #             cam_info['timestamp'] = int(frame.split('_')[-1])
+        #             cams[name] = cam_info
+        #         labels = _read_list_file(osp.join(data_path,scenario_type,agent,'label',scenario),frame,contents['label'])
+        #         agent_speed_x = float(labels[0].split(' ')[0]) # type: ignore
+        #         agent_speed_y = float(labels[0].split(' ')[1]) # type: ignore
+        #         if load_anno:
+        #             bbox_list = []
+        #             valid_flag = []
+        #             for label in labels[1:]:
+        #                 if len(label.split(' ')) <= 1: # type: ignore
+        #                     continue
+        #                 cls_label = str(label.split(' ')[0]) # type: ignore
+        #                 bbox = label.split(' ')[1:8] # type: ignore
+        #                 bbox = list(map(float, bbox))
+        #                 # ori box: xyz lwh mmstandyaw
 
-    num_processes = 20
-    num_threads = os.cpu_count()
-    target_items_split = [target_items[i::num_processes] for i in range(num_processes)]
+        #                 vel = label.split(' ')[8:10] # type: ignore
+        #                 vel = list(map(float, vel))
+        #                 # reverse the y axis
+        #                 vel = [vel[0], -vel[1]]
+        #                 agent_id = int(label.split(' ')[-3]) # type: ignore
+        #                 num_lidar_pts = int(label.split(' ')[-2]) # type: ignore
+        #                 if label.split(' ')[-1] == 'True': # type: ignore
+        #                     camera_visibility = 1
+        #                 else:
+        #                     camera_visibility = 0
+        #                 bbox_list.append((cls_label,bbox,vel,agent_id,num_lidar_pts,camera_visibility))
+        #                 if cls_label == 'pedestrian' or cls_label == 'motorcycle' or cls_label == 'cyclist':
+        #                     if agent == 'infrastructure':
+        #                         if num_lidar_pts <= 0:
+        #                             valid_flag.append(False)
+        #                         else:
+        #                             valid_flag.append(True)
+        #                     else:
+        #                         if num_lidar_pts <= 1:
+        #                             valid_flag.append(False)
+        #                         else:
+        #                             valid_flag.append(True)
+        #                 else:
+        #                     if agent == 'infrastructure':
+        #                         if num_lidar_pts <= 0:
+        #                             valid_flag.append(False)
+        #                         else:
+        #                             valid_flag.append(True)
+        #                     else:
+        #                         if num_lidar_pts <= 4:
+        #                             valid_flag.append(False)
+        #                         else:
+        #                             valid_flag.append(True)
 
-    with mp.Pool(processes=num_processes) as pool:
-        scene_data_list = list(pool.starmap(_process_target_items, [(target_items_subset, data_path, load_anno, sample_interval, pos, num_threads) for pos, target_items_subset in enumerate(target_items_split)]))
+        #             label_array = np.array([bbox[0] for bbox in bbox_list]).reshape(-1)
+        #             bbox_array = np.array([bbox[1] for bbox in bbox_list]).reshape(-1, 7)
+        #             vel_array = np.array([bbox[2] for bbox in bbox_list]).reshape(-1, 2)
+        #             vehicle_id_array = np.array([bbox[3] for bbox in bbox_list]).reshape(-1)
+        #             num_lidar_pts_array = np.array([bbox[4] for bbox in bbox_list]).reshape(-1)
+        #             camera_visibility_array = np.array([bbox[5] for bbox in bbox_list]).reshape(-1)
+        #             valid_flag = np.array(valid_flag).reshape(-1)
+                
+        #         scenario_agent_frame_info = {} # 序列中的一帧
+        #         scenario_agent_frame_info['scenario_meta'] = meta_info # 场景元数据
+        #         scenario_agent_frame_info['scenario_type'] = scenario_type # 场景类型
+        #         scenario_agent_frame_info['vehicle_name'] = agent # 协同对象名称
+        #         scenario_agent_frame_info['scene_name'] = '_'.join([scenario_type,scenario.split('_')[0],scenario.split('_')[-1]]) # 场景名称
+        #         scenario_agent_frame_info['lidar_prefix'] = '_'.join([scenario_type,agent,frame]) # 雷达帧标识符
+        #         scenario_agent_frame_info['lidar_path'] = osp.join(osp.abspath(data_path),scenario_type,agent,'lidar01',scenario,frame+contents['lidar01']) # 雷达路径
+        #         scenario_agent_frame_info['num_features'] = 4
+        #         scenario_agent_frame_info['bev_path'] = osp.join(osp.abspath(data_path),scenario_type,agent,'BEV_instance_camera',scenario,frame+contents['BEV_instance_camera']) # BEV实例路径
+        #         scenario_agent_frame_info['timestamp'] = int(frame.split('_')[-1]) # 帧时间戳，帧间隔为0.1s
+        #         scenario_agent_frame_info['scenario_length'] = last_seq_idx # 最大时间戳
+        #         scenario_agent_frame_info['cams'] = dict()# 多相机
+        #         scenario_agent_frame_info['cams'].update(cams) # 多个相机，每个相机包括图像路径，标定参数
+        #         scenario_agent_frame_info['lidar_to_ego_matrix'] = calib_dict['lidar_to_ego'] # 雷达外参
+        #         scenario_agent_frame_info['ego_to_world_matrix'] = calib_dict['ego_to_world'] # 对象的世界坐标
+        #         lidar_to_ego_matrix = np.array(calib_dict['lidar_to_ego'], dtype=np.float32)
+        #         ego_to_world_matrix = np.array(calib_dict['ego_to_world'], dtype=np.float32)
+        #         lidar_to_world_matrix = ego_to_world_matrix @ lidar_to_ego_matrix
+        #         scenario_agent_frame_info['lidar_to_world_matrix'] = lidar_to_world_matrix
+        #         scenario_agent_frame_info['sample_interval'] = sample_interval # 采样频率，决定帧间隔，原文为0.5s也就是间隔5采样
+        #         scenario_agent_frame_info['vehicle_speed_x'] = agent_speed_x # 对象的x速度 # type: ignore
+        #         scenario_agent_frame_info['vehicle_speed_y'] = agent_speed_y # 对象的y速度 # type: ignore
+        #         if load_anno:
+        #             scenario_agent_frame_info['gt_names'] = label_array # 世界类别gt # type: ignore
+        #             scenario_agent_frame_info['gt_boxes'] = bbox_array # 世界boxes # type: ignore
+        #             scenario_agent_frame_info['gt_velocity'] = vel_array# 世界速度gt # type: ignore
+        #             scenario_agent_frame_info['vehicle_id'] = vehicle_id_array # 世界类别id # type: ignore
+        #             scenario_agent_frame_info['num_lidar_pts'] = num_lidar_pts_array # 世界点云数目（目标上的点数） # type: ignore
+        #             scenario_agent_frame_info['camera_visibility'] = camera_visibility_array # 世界目标是否可见 # type: ignore
+        #             scenario_agent_frame_info['valid_flag'] = valid_flag # 雷达是否可见 # type: ignore
+        #         scene_data[scenario_agent_frame_info['scene_name']][scenario_agent_frame_info['vehicle_name']].append(scenario_agent_frame_info)
+        # # i += 1
+        # # if i > 3:
+        # #     break
 
-    from collections import ChainMap
-    scene_data = ChainMap(*scene_data_list)
-
-    for scene_name, agent_data_dict in mmengine.track_iter_progress(scene_data.items()): # 用多线程跑
+    for scene_name, agent_data_dict in scene_data.items():
         for agent in agent_names:
             if len(agent_data_dict[agent]) <= 0:
                 print(f"{scene_name} -> {agent} seq empty, skip it!!!")
@@ -271,9 +378,6 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
                             pending_idx = i - pending
                             if trj_centers_world[i] is None:
                                 if i == total_len - 1:
-                                    if not start_fill:
-                                        trj_centers_ground_vels.append(np.array([0.0, 0.0], dtype=np.float32))
-                                        start_fill = True
                                     for _ in range(pending):
                                         trj_centers_ground_vels.append(None)
                                     break # stop the loop
@@ -308,11 +412,7 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
                     track_vel[id] = trj_centers_ground_vels
                 
                 for idx, info in enumerate(agent_data_dict[agent]):
-                    try:
-                        info['gt_velocity'] = np.array([track_vel[id][idx] for id in info['vehicle_id']], dtype=np.float32) # N 2
-                    except:
-                        import pdb
-                        pdb.set_trace()
+                    info['gt_velocity'] = np.array([track_vel[id][idx] for id in info['vehicle_id']], dtype=np.float32) # N 2
 
             timestamps = [x['timestamp'] for x in agent_data_dict[agent]]
             last_timestamp = timestamps[-1]

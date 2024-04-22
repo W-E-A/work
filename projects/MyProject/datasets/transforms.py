@@ -1,11 +1,11 @@
 from typing import List, Optional, Union,  Dict, Tuple
 from numpy import ndarray
-from mmdet3d.registry import TRANSFORMS
+from mmdet3d.registry import TRANSFORMS, VISUALIZERS
 from mmdet3d.datasets.transforms.loading import LoadPointsFromFile, LoadAnnotations3D
 from mmcv.transforms.base import BaseTransform
 import numpy as np
 from mmengine.structures import BaseDataElement
-from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes, DepthInstance3DBoxes, Det3DDataSample
+from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes, DepthInstance3DBoxes, Det3DDataSample, LiDARPoints, Coord3DMode
 from mmdet3d.datasets.transforms.formating import Pack3DDetInputs
 from os import path as osp
 import copy
@@ -15,6 +15,9 @@ from ..utils import calc_relative_pose, mat2vec
 import matplotlib.pyplot as plt
 import torch
 import os
+from mmengine.logging import print_log
+import logging
+import time
 
 # NOTE add all ego motion 6 DOF
 # NOTE 把现在和未来的筛选放这里，intput 提供历史+当前输入，而data_samples提供未来+当前标签
@@ -320,7 +323,7 @@ class Pack3DDetInputsV2X(Pack3DDetInputs):
                     'pcd_scale_factor', 'pcd_rotation', 'pcd_rotation_angle', 'transformation_3d_flow',
                     'box_mode_3d', 'box_type_3d', 'num_pts_feats', 'lidar_path',
                     'sample_idx', 'ego2global', 'axis_align_matrix',
-                    'lidar2ego', 'bev_path', 'vehicle_speed_x', 'vehicle_speed_y',
+                    'lidar2ego', 'bev_path', 'vehicle_speed_x', 'vehicle_speed_y'
                 ),
                 **kwargs) -> None:
         super().__init__(*args, meta_keys = meta_keys, **kwargs)
@@ -354,8 +357,8 @@ class GatherV2XPoseInfo(BaseTransform):
             co_pose_matrix = []
             ego_loc_matrix = []
             for j in range(co_length):
-                ego2global = np.array(data_info_list[j]['data_samples'].metainfo['ego2global'], dtype=np.float32)
-                other2global = [np.array(data_info_list[k]['data_samples'].metainfo['ego2global'], dtype=np.float32) for k in range(co_length)]
+                ego2global = np.array(data_info_list[j]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) @ np.array(data_info_list[j]['data_samples'].metainfo['ego2global'], dtype=np.float32)
+                other2global = [np.array(data_info_list[k]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) @ np.array(data_info_list[k]['data_samples'].metainfo['ego2global'], dtype=np.float32) for k in range(co_length)]
                 co_pose_matrix.append(calc_relative_pose(ego2global, other2global)) # type: ignore
                 ego_loc_matrix.append(ego2global)
             co_pose_matrix = np.stack(co_pose_matrix, axis=0)
@@ -504,53 +507,46 @@ class ConvertMotionLabels(BaseTransform):
         return None
 
 
+def log(msg = "" ,level: int = logging.INFO):
+    print_log(msg, "current", level)
 @TRANSFORMS.register_module()
-class ImportanceFilter(BaseTransform):
+class CorrelationFilter(BaseTransform):
+
     def __init__(self,
-                 pc_range,
-                 voxel_size,
-                 ego_id: int = -100,
-                 ego_name: str = 'ego_vehicle',
-                 only_vehicle: bool = False,
-                 vehicle_id_list: list = [0, 1, 2],
-                 ignore_thres: float = 0.5,
-                 interrrupt_thres: float = 10,
-                 visualize: Optional[str] = None,
-                 ) -> None:
-        self.pc_range = pc_range
-        self.voxel_size = voxel_size
-        self.ego_id = ego_id
+        ego_name: str = 'ego_vehicle',
+        with_velocity: bool = True,
+        only_vehicle: bool = False,
+        vehicle_id_list: list = [0, 1, 2],
+        ego_id: int = -100,
+        min_distance_thres: float = 5,
+        max_distance_thres: float = 20,
+        alpha_coeff: float = 1,
+        beta_coeff: float = 1,
+        gamma_coeff: float = 2,
+        visualizer_cfg: dict = None,
+        just_save_root: str = None,
+        increment_save: bool = True,
+        verbose: bool = False
+    ) -> None:
         self.ego_name = ego_name
+        self.with_velocity = with_velocity
         self.only_vehicle = only_vehicle
         self.vehicle_id_list = vehicle_id_list
-        self.ignore_thres = ignore_thres
-        self.interrrupt_thres = interrrupt_thres
-        self.visualize = visualize
-        if self.visualize is not None:
-            os.makedirs(self.visualize, exist_ok=True) # type: ignore
-
-        self.voxel_size = np.array(self.voxel_size).astype(np.float32)
-
-        self.grid_size = np.array([
-            np.ceil((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
-            np.ceil((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
-            np.ceil((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
-        ]).astype(np.int32) # 1024 1024 1
-
-        self.offset_xy = np.array([
-            self.pc_range[0] + self.voxel_size[0] * 0.5,
-            self.pc_range[1] + self.voxel_size[1] * 0.5
-        ]).astype(np.float32)
-
-        if self.visualize:
-            self.scatter_trans = np.array(
-                [[-1, 0],
-                [0, -1]],
-                dtype=np.float32
-            )
-            self.save_count = 0
-            self.fig, self.ax = plt.subplots(1, 1)
-
+        self.ego_id = ego_id
+        self.min_distance_thres = min_distance_thres
+        self.max_distance_thres = max_distance_thres
+        self.alpha_coeff = alpha_coeff
+        self.beta_coeff = beta_coeff
+        self.gamma_coeff = gamma_coeff
+        self.visualizer = None
+        if visualizer_cfg is not None:
+            self.visualizer: SimpleLocalVisualizer = VISUALIZERS.build(visualizer_cfg)
+            assert just_save_root != None
+            os.makedirs(just_save_root, exist_ok=True)
+        self.just_save_root = just_save_root
+        self.increment_save = increment_save
+        self.verbose = verbose
+        
         self.cmaps = [
             'Oranges', 'Greens', 'Purples', 'Oranges', 'PuRd', 'BuPu',
         ]
@@ -560,30 +556,97 @@ class ImportanceFilter(BaseTransform):
         #     'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
         # ]
 
-    def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
-        present_idx = input_dict['present_idx']
-        seq_length = input_dict['seq_length']
-        scene_name = input_dict['scene_name']
-        seq_timestamp_0 = input_dict['seq_timestamps'][0]
-        co_agents = copy.deepcopy(input_dict['co_agents'])
-        example_seq = input_dict['example_seq']
-        future_seq_timestamps = range(seq_length)[present_idx:]
-        future_length = len(future_seq_timestamps)
-        future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4
-        future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4
+    def linear_motion_score(self,
+            ego_center: np.ndarray,
+            target_center: np.ndarray,
+            min_distance_thres: float,
+            max_distance_thres: float,
+            alpha_coeff: float # 这个由网络轨迹预测给出轨迹的概率p，然后让(1 - p)表示如果轨迹概率为1，则少衰减比如0.5，概率接近0则多衰减比如2 ？？？？？
+        ):
+        assert ego_center.shape == target_center.shape
+        assert len(ego_center.shape) == 2
+        if len(ego_center) <= 0:
+            return 0
+        
+        encounter_distance = np.linalg.norm(ego_center - target_center, axis=1)
+        encounter_distance = np.clip(encounter_distance, min_distance_thres, max_distance_thres)
+        base_score = np.interp(encounter_distance, [min_distance_thres, max_distance_thres], [1, 0])
+        time_decay_coeff = np.exp(-alpha_coeff * np.linspace(0, 1, len(base_score)))
+        time_decay_coeff = time_decay_coeff / np.sum(time_decay_coeff)
+        decay_score = time_decay_coeff * base_score
+        final_score = np.sum(decay_score)
 
-        co_agents = {v : k for k, v in enumerate(co_agents)}
+        return final_score
 
+    def potential_score(self,
+        ego_center: np.ndarray, # 2,
+        ego_vel: np.ndarray, # 2,
+        target_center: np.ndarray, # 2,
+        target_vel: np.ndarray, # 2,
+        target_label,
+        min_distance_thres: float,
+        beta_coeff: float, 
+        gamma_coeff: float,
+        weight = [1, 1, 1, 1, 1, 1, ]
+    ):
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
+        assert ego_center.shape == target_center.shape == ego_vel.shape == target_vel.shape
+        assert len(ego_center) == 2 and len(ego_center.shape) == 1
+            
+        rela_vector = ego_center - target_center
+        rela_vector_norm = np.linalg.norm(rela_vector, ord=2)
+        rela_vector_norm = np.clip(rela_vector_norm, min_distance_thres, np.inf)
+        rela_vel = target_vel - ego_vel
+        rela_vel_norm = np.linalg.norm(rela_vel, ord=2)
+        rela_vel_norm = np.clip(rela_vel_norm, 1e-6, np.inf)
+        ctheta = np.dot(rela_vector, rela_vel) / rela_vector_norm / rela_vel_norm
+        
+        potential = weight[target_label] * np.exp(beta_coeff * rela_vel_norm * ctheta) / np.power(rela_vector_norm, gamma_coeff)
+        p_score = sigmoid(potential) - 0.5
+        return potential, p_score
+
+
+    def transform(self, input_dict):
+        sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
+        sample_interval = input_dict['sample_interval'] # 序列采集间隔
+        present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
+        seq_length = input_dict['seq_length'] # 当前序列长度，比如6
+        scene_name = input_dict['scene_name'] # 序列所属场景
+        seq_timestamps = input_dict['seq_timestamps'] # 序列时间戳
+        co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
+        example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
+        future_seq_position = range(seq_length)[present_idx:] # 取出未来帧在序列中的位置， 比如3, 4, 5
+        future_length = len(future_seq_position) # 表明未来帧的长度，比如3
+        future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
+        future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
+        future_loc_matrix = input_dict['loc_matrix'][present_idx:, :, ...] # c x 4 4 # 未来帧ego的实际位置
+
+        if self.verbose:
+            log(scene_name)
+            log(seq_timestamps)
+
+        co_agents = {v : k for k, v in enumerate(co_agents)} # str : int
         assert self.ego_name in co_agents and self.ego_name != 'infrastructure'
         track_map_list = []
         for agent, j in co_agents.items():
             if agent == self.ego_name:
+                # 如果处理的是ego则先得到ego的规划轨迹和关键帧相对于其他协同对象的变换矩阵
                 ego_motion_matrix = future_motion_matrix[j] # x 4 4 rela to present
-                persent_trans_matrix = future_pose_matrix[0, :, j] # c 4 4
-                persent_trans_matrix = np.delete(persent_trans_matrix, j, axis=0) # ego to [ego, other, ...] at present c-1 4 4
+                present_trans_matrix = future_pose_matrix[0, :, j] # c 4 4
+                present_trans_matrix = np.delete(present_trans_matrix, j, axis=0) # ego to [ego, other, ...] at present c-1 4 4
+                if self.with_velocity:
+                    ego_present_vel = np.array(
+                        [example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_x'],
+                         example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_y']],
+                         dtype=np.float32
+                    )
+                    if self.verbose:
+                        log(f"ego : {ego_present_vel}")
             else:
+                # 如果处理的是协同代理，则对于每个代理在时序上跟踪所有目标，相对于关键帧的轨迹，每个代理得到一个track_map
                 track_map = {}
-                for i, timestamp in enumerate(future_seq_timestamps):
+                for i, timestamp in enumerate(future_seq_position):
                     gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
 
                     if self.only_vehicle:
@@ -594,7 +657,7 @@ class ImportanceFilter(BaseTransform):
                         ego_mask = gt_instances_3d.track_id != self.ego_id
                         gt_instances_3d = gt_instances_3d[ego_mask]
 
-                    gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target
+                    # gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target bug do not modify
 
                     lidar2agent = np.array(example_seq[timestamp][j]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) # type: ignore
                     agent2present = future_motion_matrix[j][i]
@@ -603,76 +666,176 @@ class ImportanceFilter(BaseTransform):
                     gt_instances_3d.bboxes_3d.translate(lidar2present[:3, 3]) # valid boxes to present
                     
                     for idx, id in enumerate(gt_instances_3d.track_id):
-                        bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # agent坐标系下其他目标的present的中心
-                        labels = gt_instances_3d.labels_3d[idx]
+                        bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # present坐标系下其他目标的present的中心
+                        bboxes_vel = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[-2:] # present velocity
+                        label = gt_instances_3d.labels_3d[idx]
                         if id not in track_map:
                             track_map[id] = {
                                 # 'color': self.cmaps[np.random.randint(0, len(self.cmaps))],
-                                'color': self.cmaps[labels],
+                                # 'color': self.cmaps[label],
+                                'label': label,
                                 'center': [],
+                                'vel': [],
                                 'start': i
                             }
                         track_map[id]['center'].append(bboxes_xy)
+                        if self.with_velocity:
+                            track_map[id]['vel'].append(bboxes_vel)
                 track_map_list.append(track_map)
 
         ego_dix = co_agents.pop(self.ego_name) # ignore the ego
 
         for i, (agent, j) in enumerate(co_agents.items()): # agent
+            # 对于每个协同代理的视角下，将ego的规划轨迹转到协同代理的当前坐标系下
             track_map = track_map_list[i]
             present_instances_3d = example_seq[present_idx][j]['data_samples'].gt_instances_3d
-            trans = persent_trans_matrix[i] # type: ignore
+            trans = present_trans_matrix[i] # type: ignore
             rela_matrix = np.stack([trans @ ego_motion_matrix[k] for k in range(future_length)], axis=0) # type: ignore
             rela_centers = rela_matrix[:, :2, 3] # x 2
+            if self.with_velocity:
+                rots = np.linalg.inv(future_loc_matrix[j, 0, ...])[:2, :2]# 每个ego速度对于世界，先转到对于present的代理描述下
+                trans_rot = trans[:2, :2] # ego和代理之间具有相对运动，参考上述的motion通过当前的trans转到代理下
+                rela_vel = ego_present_vel @ rots.T @ trans_rot.T
+
+            if self.visualizer:
+                self.visualizer.set_points_from_npz(example_seq[present_idx][j]['data_samples'].metainfo["lidar_path"])
             
-            if self.visualize:
-                rela_centers_vis = rela_centers @ self.scatter_trans.T # type: ignore
-                # FIXME 这里其实是BEV分割图片的问题，按照原方式编码才能对齐点云特征
-                # rela_centers_vis = rela_centers
-                rela_centers_voxel = np.round((rela_centers_vis - self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
-                self.ax.imshow(np.full((self.grid_size[0], self.grid_size[1], 3), 127, dtype=np.uint8)) # type: ignore
-                self.ax.set_autoscale_on(False)
-                self.ax.scatter(rela_centers_voxel[:, 0], rela_centers_voxel[:, 1], c = np.linspace(0.0, 1.0, future_length)[::-1], cmap='Blues', s=8) # type: ignore
-            
-            valid_id = []
+            # 对于每个协同代理的检测结果（这里是真值），计算其和ego轨迹的关系
+            result_dict = {}
+            if self.with_velocity:
+                potential_dict = {}
             for id, v in track_map.items():
-                color = v['color']
-                start = v['start']
-                centers = np.stack(v['center'], axis=0)
-                cmp_centers = rela_centers[start:start + len(centers)]
-                distance = np.linalg.norm(centers - cmp_centers, axis=1)
-                interrupt_mask = np.logical_and(distance < self.interrrupt_thres, distance > self.ignore_thres)
-                isvalid = np.any(interrupt_mask)
-                if isvalid:
-                    valid_id.append(id)
+                # 对于每一条轨迹
+                # color = v['color'] # 类型颜色
+                start = v['start'] # 开始跟踪的时间戳
+                centers = np.stack(v['center'], axis=0) # N, 2 # 轨迹中心点
+                cmp_centers = rela_centers[start:start + len(centers)] # N, 2 这里保证ego是从头开始的，因此在有效预测目标轨迹的时间段对比
+                correlation_score = 0
+                motion_score = self.linear_motion_score(
+                    cmp_centers, centers, self.min_distance_thres, self.max_distance_thres, self.alpha_coeff
+                )
+                if self.with_velocity:
+                    p_score = 0
+                    if start == 0: # 忽略当前之后再出现的目标的速度
+                        vel = v['vel'][start]
+                        label = v['label']
+                        if self.verbose:
+                            log(f"{id} : {vel}")
+                        potential, p_score = self.potential_score(
+                            cmp_centers[0],
+                            rela_vel,
+                            centers[0],
+                            vel,
+                            label,
+                            self.min_distance_thres,
+                            self.beta_coeff,
+                            self.gamma_coeff
+                        )
+                        correlation_score = motion_score * 0.5 + p_score
+                else:
+                    correlation_score = motion_score
+                result_dict[id] = correlation_score
+                if self.with_velocity:
+                    potential_dict[id] = p_score # potential
 
-                if self.visualize:
-                    centers_vis = centers @ self.scatter_trans.T # type: ignore
-                    # FIXME 这里其实是BEV分割图片的问题，按照原方式编码才能对齐点云特征
-                    # centers_vis = centers
-                    voxel_centers = np.round((centers_vis - self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
-                    if isvalid:
-                        self.ax.scatter(voxel_centers[: ,0], voxel_centers[:, 1], c = np.linspace(0.0, 1.0, len(voxel_centers))[::-1], cmap=color, s=3) # type: ignore
-                    else:
-                        self.ax.scatter(voxel_centers[: ,0], voxel_centers[:, 1], c = np.linspace(0.0, 1.0, len(voxel_centers))[::-1], cmap='binary', s=1) # type: ignore
+                if self.visualizer:
+                    if self.with_velocity and start == 0:
+                        vel_vector = np.stack([centers[0], centers[0] + sample_interval * 0.1 * vel]) # 2, 2
+                        self.visualizer.draw_arrows(vel_vector, fc = 'r', ec = 'r', width = 6, head_width = 12, head_length = 10)
+                    self.visualizer.draw_points(centers, colors=np.linspace(0.0, 1.0, len(centers))[::-1], sizes = 40, cmap='Greens')
             
-            valid_id_mask = np.isin(present_instances_3d.track_id, valid_id)
+            # import pdb
+            # pdb.set_trace()
+            correlation_scores = np.array([result_dict[id] if id in result_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
+            potentials = np.array([potential_dict[id] if id in potential_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
             
-            present_instances_3d['importance'] = valid_id_mask
+            present_instances_3d['correlation'] = torch.tensor(correlation_scores, dtype=torch.float32)
             example_seq[present_idx][j]['data_samples'].gt_instances_3d = present_instances_3d
-            if self.visualize:
-                print(valid_id)
-                print(agent)
-                print(present_instances_3d.track_id)
-                print(valid_id_mask)
-                self.ax.set_axis_off()
-                save_name = os.path.join(self.visualize, f'rela_{scene_name}_{seq_timestamp_0}.png')
-                self.fig.savefig(save_name, dpi = 300, bbox_inches='tight', pad_inches=0) # type: ignore # FIXME MORE FIG ONCE
-                self.ax.cla()
+            if self.visualizer:
+                self.visualizer.draw_points(rela_centers, colors=np.linspace(0.0, 1.0, future_length)[::-1], sizes = 80, cmap='Blues')
+                if self.with_velocity:
+                    rela_vel_vector = np.stack([rela_centers[0], rela_centers[0] + sample_interval * 0.1 * rela_vel])
+                    self.visualizer.draw_arrows(rela_vel_vector, fc = 'm', ec = 'm', width = 6, head_width = 12, head_length = 10)
+                self.visualizer.draw_bev_bboxes(present_instances_3d.bboxes_3d, c='#FF8000')
+                correlation_scores_str = [f"{s:.2f}" for s in list(correlation_scores)]
+                self.visualizer.draw_texts(
+                    correlation_scores_str,
+                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                    font_sizes = 12,
+                    colors = '#FFFF00',
+                    vertical_alignments = 'top',
+                    horizontal_alignments = 'left')
+                potentials_str = [f"{s:.2f}" for s in list(potentials)]
+                self.visualizer.draw_texts(
+                    potentials_str,
+                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                    font_sizes = 12,
+                    colors = '#00FFFF',
+                    vertical_alignments = 'top',
+                    horizontal_alignments = 'right')
+                self.visualizer.draw_texts(
+                    present_instances_3d.track_id.tolist(),
+                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                    font_sizes = 12,
+                    colors = '#FF00FF',
+                    vertical_alignments = 'bottom',
+                    horizontal_alignments = 'right')
 
-        example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d['importance'] = \
-        np.full_like(example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d.bbox_3d_isvalid, True) # type: ignore
+                if self.verbose:
+                    log(result_dict)
+                    log(correlation_scores)
+                    log(agent)
+                if self.increment_save:
+                    self.visualizer.just_save(os.path.join(self.just_save_root, f"{sample_idx}_in_{agent}_{time.time_ns()}.png"))
+                else:
+                    self.visualizer.just_save(os.path.join(self.just_save_root, f"in_{agent}.png"))
+                self.visualizer.clean()
+
+        example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d['correlation'] = \
+        np.ones_like(example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d.track_id, dtype=np.float32) # type: ignore
         input_dict['example_seq'] = example_seq
 
+        return input_dict
+
+
+@TRANSFORMS.register_module()
+class GatherHistoryPoint(BaseTransform):
+    def __init__(self, pad_delay: bool = True) -> None:
+        self.pad_delay = pad_delay
+    def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
+        sample_interval = input_dict['sample_interval'] # 序列采集间隔
+        present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
+        seq_length = input_dict['seq_length'] # 当前序列长度，比如6
+        co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
+        example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
+        history_seq_position = range(seq_length)[:present_idx+1] # 历史帧索引
+        history_length = len(history_seq_position) # 历史长度
+        delays = [-i * sample_interval * 0.1 for i in range(history_length)][::-1] # 历史时间差
+        future_loc_matrix = input_dict['loc_matrix'][:present_idx+1, ...] # c x 4 4 # 历史ego的实际位置 比如 3, 2, 4, 4
+
+        after_dim = 4
+        for j, agent in enumerate(co_agents):
+            all_points = []
+            for i, idx in enumerate(history_seq_position):
+                # import pdb
+                # pdb.set_trace()
+                points = example_seq[idx][j]['inputs']['points']
+                if self.pad_delay:
+                    points = torch.cat([
+                        points,
+                        torch.full_like(points[..., :1], delays[i])
+                    ], dim=-1)
+                points = LiDARPoints(
+                    points,
+                    points_dim=points.shape[-1],
+                )
+                if i < history_length - 1:
+                    trans = calc_relative_pose(future_loc_matrix[-1], future_loc_matrix[i])
+                    all_points.append(points.convert_to(Coord3DMode.LIDAR, trans))
+                else:
+                    all_points.append(points)
+            all_points = LiDARPoints.cat(all_points)
+            example_seq[present_idx][j]['inputs']['points'] = all_points.tensor
         return input_dict
 
 
@@ -755,7 +918,7 @@ class PackSceneInfo(BaseTransform):
     def __init__(self,
                  meta_keys: tuple = (
                     'scene_name', 'seq_length', 'present_idx', 'co_agents', 'co_length', 'scene_length',
-                    'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'future_motion_matrix'
+                    'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'future_motion_matrix', 'loc_matrix'
                     ),
                 delete_ori_key: bool = True,
                 

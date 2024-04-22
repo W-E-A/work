@@ -264,11 +264,11 @@ def dair_v2x_data_prep(root_path, info_prefix, version, out_dir):
         # info_test_path = osp.join(out_dir, f'{info_prefix}_infos_test.pkl')
     elif version == 'spd':
         info_prefix += f'-{version}'
-        #TODO
+        # FIXME
         raise NotImplementedError('Can not handle spd version.')
     elif version == 'tfd':
         info_prefix += f'-{version}'
-        #TODO
+        # FIXME
         raise NotImplementedError('Can not handle tfd version.')
     else:
         raise ValueError(f'Invalid version: {version}')

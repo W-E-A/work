@@ -10,7 +10,7 @@ from mmengine.runner import Runner
 import pdb
 
 
-# TODO: support fuse_conv_bn and format_only
+# FIXME: support fuse_conv_bn and format_only
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a Cooperative Perception Model')
     parser.add_argument('config', help='test config file path')

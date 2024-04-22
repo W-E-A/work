@@ -137,3 +137,6 @@ mmdet3d/evaluation/functional/waymo_utils/compute_detection_let_metrics_main
 
 # nohup default output
 nohup.out
+
+# thirdpart
+pypcd

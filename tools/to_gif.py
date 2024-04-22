@@ -1,22 +1,32 @@
 import imageio
 from glob import glob
+import os
 
+def to_gif(root_path, fps):
 # 把场景序列文件放到一个文件夹，然后输出gif图像
 
-imgpath = glob('./data/step_vis_data/temp/*')
-name = imgpath[0].split('/')[-1].split('.')[0].split('_')[:-1]
-name = '_'.join(name)
-output_gif_path = f'./data/step_vis_data/{name}.gif'
+    imgpath = glob(os.path.join(root_path, '*'))
+    if len(imgpath) <= 0:
+        print("empty folder, return")
+        return
+    output_gif_path = os.path.join(root_path, 'vis.gif')
 
-png_files = [f for f in imgpath if f.endswith('.png')]
+    png_files = [f for f in imgpath if f.endswith('.png')]
 
-png_files = sorted(png_files, key=lambda x : int(x.split('_')[-1].split('.')[0]))
+    png_files = sorted(png_files, key=lambda x : int(x.split('_')[-1].split('.')[0]))
 
-images = []
-for png_file in png_files:
-    images.append(imageio.imread(png_file))
+    images = []
+    for png_file in png_files:
+        images.append(imageio.imread(png_file))
 
-imageio.mimsave(output_gif_path, images, 'GIF', fps=2, loop=0) # type: ignore
+    imageio.mimsave(output_gif_path, images, 'GIF', fps=fps, loop=0) # type: ignore
+    print("to_gif done")
+
+
+if __name__ == '__main__':
+    ROOT_PATH = './data/gt_vis_data/20240419_160547'
+    fps = 2
+    to_gif(ROOT_PATH, fps)
 
 
 # import imageio

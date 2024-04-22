@@ -126,6 +126,26 @@ class SimpleLocalVisualizer(Visualizer):
             positions_voxel[:, 0], positions_voxel[:, 1], c=colors, s=sizes, marker=marker, **kwargs)
     
     @master_only
+    def draw_arrows(self,
+        positions: Union[np.ndarray, torch.Tensor],
+        **kwargs
+    ):
+        check_type('positions', positions, (np.ndarray, torch.Tensor))
+        positions = tensor2ndarray(positions)
+
+        if len(positions.shape) == 1:
+            positions = positions[None]
+        assert positions.shape[-1] == 2, (
+            'The shape of `positions` should be (N, 2), '
+            f'but got {positions.shape}')
+
+        positions_voxel = np.round((positions - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 2
+        dx = positions_voxel[1][0] - positions_voxel[0][0]
+        dy = positions_voxel[1][1] - positions_voxel[0][1]
+        self.ax_save.arrow(positions_voxel[0][0], positions_voxel[0][1], dx, dy, **kwargs)
+
+    
+    @master_only
     def draw_texts(
         self,
         texts: Union[str, List[str]],

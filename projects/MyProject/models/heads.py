@@ -127,7 +127,7 @@ class MTHead(BaseModule):
         
         if 'det_feat' in feat_dict and det_gt != None:
             multi_tasks_multi_feats = feat_dict['det_feat']
-            # TODO just one scale here
+            # FIXME just one scale here
             temp_dict = self.det_head.loss_by_feat(multi_tasks_multi_feats, **det_gt) # type: ignore
             if gather_task_loss:
                 gather_dict = {}
@@ -143,7 +143,7 @@ class MTHead(BaseModule):
 
         if 'motion_feat' in feat_dict and motion_gt != None:
             multi_tasks_multi_feats = feat_dict['motion_feat']
-            # TODO just one scale here
+            # FIXME just one scale here
             temp_dict = self.motion_head.loss_by_feat(multi_tasks_multi_feats, **motion_gt) # type: ignore
             if gather_task_loss:
                 gather_dict = {}
@@ -169,7 +169,7 @@ class MTHead(BaseModule):
         
         if 'det_feat' in feat_dict and batch_input_metas != None:
             multi_tasks_multi_feats = feat_dict['det_feat']
-            # TODO just one scale here
+            # FIXME just one scale here
             if return_heatmaps:
                 predict_dict['det_pred'] = self.det_head.predict_heatmaps(multi_tasks_multi_feats) # type: ignore
             else:
@@ -177,7 +177,7 @@ class MTHead(BaseModule):
 
         # if 'motion_feat' in feat_dict and batch_input_metas != None:
         #     multi_tasks_multi_feats = feat_dict['motion_feat']
-        #     # TODO just one scale here
+        #     # FIXME just one scale here
         #     batch_result_instances = self.motion_head.predict_by_feat(multi_tasks_multi_feats, batch_input_metas) # type: ignore
         #     predict_dict['motion_pred'] = batch_result_instances
 
@@ -196,6 +196,8 @@ class CenterHeadModified(BaseModule):
                      type='mmdet.GaussianFocalLoss', reduction='mean'),
                  loss_bbox: dict = dict(
                      type='mmdet.L1Loss', reduction='none', loss_weight=0.25),
+                 #wyc改
+                 loss_corr = None,
                  separate_head: dict = dict(
                      type='mmdet.SeparateHead',
                      init_bias=-2.19,
@@ -215,10 +217,10 @@ class CenterHeadModified(BaseModule):
             'behavior, init_cfg is not allowed to be set'
         super(CenterHeadModified, self).__init__(init_cfg=init_cfg, **kwargs)
 
-        # TODO we should rename this variable,
+        # FIXME we should rename this variable,
         # for example num_classes_per_task ?
         # {'num_class': 2, 'class_names': ['pedestrian', 'traffic_cone']}]
-        # TODO seems num_classes is useless
+        # FIXME seems num_classes is useless
         num_classes = [len(t['class_names']) for t in tasks] # type: ignore
         self.class_names = [t['class_names'] for t in tasks] # type: ignore
         self.train_cfg = train_cfg
@@ -229,6 +231,9 @@ class CenterHeadModified(BaseModule):
 
         self.loss_cls = MODELS.build(loss_cls)
         self.loss_bbox = MODELS.build(loss_bbox)
+        #wyc改
+        if loss_corr is not None:
+            self.loss_corr = MODELS.build(loss_corr)
         self.bbox_coder = TASK_UTILS.build(bbox_coder) # type: ignore
         self.num_anchor_per_locs = [n for n in num_classes]
 
@@ -251,7 +256,13 @@ class CenterHeadModified(BaseModule):
                 in_channels=share_conv_channel, heads=heads, num_cls=num_cls)
             self.task_heads.append(MODELS.build(separate_head))
 
-        self.with_velocity = with_velocity
+        #wyc修改
+        # self.with_velocity = with_velocity
+        if 'vel' in common_heads.keys():
+            self.with_velocity = True
+        if 'corr' in common_heads.keys():
+            self.with_correlation = True
+
         if self.train_cfg:
             self.max_objs = int(self.train_cfg['max_objs'] * self.train_cfg['dense_reg'])
             self.pc_range = self.train_cfg['point_cloud_range']
@@ -477,10 +488,17 @@ class CenterHeadModified(BaseModule):
         gt_labels_3d = gt_instances_3d.labels_3d # type: ignore
         gt_bboxes_3d = gt_instances_3d.bboxes_3d # type: ignore
         track_id = gt_instances_3d.track_id # type: ignore
+        #wyc改
+        gt_correlation = gt_instances_3d.correlation[..., None]
+
         device = gt_labels_3d.device
         gt_bboxes_3d = torch.cat( # get gravity center box
             (gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]),
             dim=1).to(device)
+        #wyc改
+        if gt_correlation is not None:
+            gt_bboxes_3d = torch.cat([gt_bboxes_3d, gt_correlation], dim=1)
+            
         track_id = torch.tensor(track_id, dtype=gt_labels_3d.dtype, device=device)
 
         # reorganize the gt_dict by tasks
@@ -523,8 +541,12 @@ class CenterHeadModified(BaseModule):
             relamap = copy.deepcopy(heatmap)
 
             if self.with_velocity:
-                anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 10),
-                                                dtype=torch.float32)
+                if self.with_correlation:
+                    anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 11),
+                                                    dtype=torch.float32)
+                else:
+                    anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 10),
+                                                    dtype=torch.float32)
             else:
                 anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 8),
                                                 dtype=torch.float32)
@@ -587,19 +609,38 @@ class CenterHeadModified(BaseModule):
                     ind[new_idx] = y * self.feature_map_size[1] + x
                     mask[new_idx] = 1
                     if self.with_velocity:
-                        vx, vy = task_boxes[idx][k][7:]
-                        rot = task_boxes[idx][k][6]
-                        box_dim = task_boxes[idx][k][3:6]
-                        if self.norm_bbox:
-                            box_dim = box_dim.log()
-                        anno_box[new_idx] = torch.cat([
-                            center - torch.tensor([x, y], device=device),
-                            z.unsqueeze(0), box_dim,
-                            torch.sin(rot).unsqueeze(0),
-                            torch.cos(rot).unsqueeze(0),
-                            vx.unsqueeze(0),
-                            vy.unsqueeze(0)
-                        ])
+                        #wyc改
+                        if self.with_correlation:
+                            corr = task_boxes[idx][k][9]
+                            vx, vy = task_boxes[idx][k][7:9]
+                            rot = task_boxes[idx][k][6]
+                            box_dim = task_boxes[idx][k][3:6]
+                            if self.norm_bbox:
+                                box_dim = box_dim.log()
+                            
+                            anno_box[new_idx] = torch.cat([
+                                center - torch.tensor([x, y], device=device),
+                                z.unsqueeze(0), box_dim,
+                                torch.sin(rot).unsqueeze(0),
+                                torch.cos(rot).unsqueeze(0),
+                                vx.unsqueeze(0),
+                                vy.unsqueeze(0),
+                                corr.unsqueeze(0)
+                            ])
+                        else:
+                            vx, vy = task_boxes[idx][k][7:]
+                            rot = task_boxes[idx][k][6]
+                            box_dim = task_boxes[idx][k][3:6]
+                            if self.norm_bbox:
+                                box_dim = box_dim.log()
+                            anno_box[new_idx] = torch.cat([
+                                center - torch.tensor([x, y], device=device),
+                                z.unsqueeze(0), box_dim,
+                                torch.sin(rot).unsqueeze(0),
+                                torch.cos(rot).unsqueeze(0),
+                                vx.unsqueeze(0),
+                                vy.unsqueeze(0)
+                            ])
                     else:
                         rot = task_boxes[idx][k][6]
                         box_dim = task_boxes[idx][k][3:6]
@@ -661,6 +702,17 @@ class CenterHeadModified(BaseModule):
             isnotnan = (~torch.isnan(target_box)).float() # B M 8/10
             mask *= isnotnan # B M 8/10
             bbox_weights = mask * mask.new_tensor(self.code_weights) # B M 8/10 * 8/10
+            #wyc改
+            if self.with_correlation:
+                corr_weights = bbox_weights[...,-1][...,None]
+                bbox_weights = bbox_weights[..., :-1]
+                target_corr = target_box[..., -1][..., None]
+                target_box = target_box[..., :-1]
+                pred_corr = pred_result['corr'].permute(0, 2, 3, 1).contiguous()
+                pred_corr = pred_corr.view(pred_corr.size(0), -1, pred_corr.size(3))
+                pred_corr = self._gather_feat(pred_corr, ind)
+                loss_corr = self.loss_corr(pred_corr, target_corr, corr_weights, avg_factor=(num + 1e-4))
+                loss_dict[f'task{task_id}.loss_corr'] = loss_corr
             loss_bbox = self.loss_bbox(
                 pred, target_box, bbox_weights, avg_factor=(num + 1e-4)) # invaid will be masked by the weight
             loss_dict[f'task{task_id}.loss_heatmap'] = loss_heatmap
@@ -712,11 +764,15 @@ class CenterHeadModified(BaseModule):
                 batch_dim,
                 batch_vel,
                 reg=batch_reg,
-                task_id=task_id)
+                task_id=task_id,
+                corr=preds_dict[0]['corr'] if self.with_correlation else None)#wyc改
             assert self.nms_type in ['circle', 'rotate']
             batch_reg_preds = [box['bboxes'] for box in temp] # B * box
             batch_cls_preds = [box['scores'] for box in temp] # B * score
             batch_cls_labels = [box['labels'] for box in temp] # B * score
+            #wyc改
+            if self.with_correlation:
+                batch_reg_preds = [torch.cat([batch_reg_preds[i], box['corr']], dim=-1)  for i,box in enumerate(temp)]
             if self.nms_type == 'circle':
                 ret_task = []
                 for i in range(batch_size):

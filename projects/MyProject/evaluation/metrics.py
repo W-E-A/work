@@ -302,7 +302,7 @@ class KittiMetricModified(BaseMetric):
         return det_annos
 
     def convert_valid_bboxes_pd(self, box_dict: dict, sample_idx: int, metainfo: dict) -> dict:
-        # TODO: refactor this function
+        # FIXME: refactor this function
         box_preds = box_dict['bboxes_3d']
         scores = box_dict['scores_3d']
         labels = box_dict['labels_3d']
@@ -330,7 +330,7 @@ class KittiMetricModified(BaseMetric):
             sample_idx=sample_idx)
     
     def convert_valid_bboxes_gt(self, box_dict: dict, sample_idx: int, metainfo: dict) -> dict:
-        # TODO: refactor this function
+        # FIXME: refactor this function
         box_preds = box_dict['bboxes_3d']
         labels = box_dict['labels_3d']
         box_type_3d = metainfo['box_type_3d']

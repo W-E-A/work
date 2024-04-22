@@ -128,7 +128,8 @@ class CenterPointBBoxCoder(BaseBBoxCoder):
                dim: Tensor,
                vel: Tensor,
                reg: Optional[Tensor] = None,
-               task_id: int = -1) -> List[Dict[str, Tensor]]:
+               task_id: int = -1,
+               corr = None,) -> List[Dict[str, Tensor]]:
         """Decode bboxes.
 
         Args:
@@ -178,6 +179,11 @@ class CenterPointBBoxCoder(BaseBBoxCoder):
         dim = self._transpose_and_gather_feat(dim, inds)
         dim = dim.view(batch, self.max_num, 3)
 
+        #wyc改
+        if corr is not None:
+            corr = self._transpose_and_gather_feat(corr, inds)
+            corr = corr.view(batch, self.max_num, 1)
+
         # class label
         clses = clses.view(batch, self.max_num).float()
         scores = scores.view(batch, self.max_num)
@@ -198,6 +204,8 @@ class CenterPointBBoxCoder(BaseBBoxCoder):
 
         final_scores = scores
         final_preds = clses
+        #wyc改
+        final_corr = corr
 
         # use score threshold
         if self.score_threshold is not None:
@@ -225,7 +233,9 @@ class CenterPointBBoxCoder(BaseBBoxCoder):
                     'scores': scores,
                     'labels': labels
                 }
-
+                if corr is not None:
+                    corr = final_corr[i, cmask]
+                    predictions_dict['corr'] = corr
                 predictions_dicts.append(predictions_dict)
         else:
             raise NotImplementedError(

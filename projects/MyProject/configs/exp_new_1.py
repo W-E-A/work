@@ -25,11 +25,12 @@ out_factor = 4
 det_out_factor = 4
 motion_out_factor = 4
 
-det_with_velocity = False
-# code_size = 9
-code_size = 7
-# code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
-code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+pad_delay = True
+det_with_velocity = True
+code_size = 10
+# code_size = 7
+code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2, 0.2]#wyc改
+# code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 det_tasks = [
     dict(num_class=1, class_names=['car']),
     dict(num_class=2, class_names=['van', 'truck']),
@@ -41,37 +42,30 @@ det_common_heads = dict(
     height=(1, 2),
     dim=(3, 2),
     rot=(2, 2),
-    # vel=(2, 2)
+    vel=(2, 2),
+    corr=(1, 2) #wyc改
 )
 
 # train params
-train_batch_size = 1
-# train_batch_size = 2
+train_batch_size = 4
 train_num_workers = 8
-# train_seq_length = 100
-train_seq_length = 6
-train_present_idx = 0
+train_seq_length = 8
+train_present_idx = 2
 train_key_interval = 1
 train_co_agents = ('ego_vehicle', 'infrastructure')
-# train_co_agents = ('ego_vehicle',)
 train_ego_name = 'ego_vehicle'
 train_mode = 'sparse_fusion' # sparse_fusion, dense_fusion, single 分别为where2comm的通信，全通信，单车检测
-# train_mode = 'dense_fusion'
 train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
 
 # test params
 test_batch_size = 1
-# test_batch_size = 2
 test_num_workers = 1
-# test_seq_length = 100
 test_seq_length = 6
 test_present_idx = 0
 test_key_interval = 1
 test_co_agents = ('ego_vehicle', 'infrastructure')
-# test_co_agents = ('ego_vehicle',)
 test_ego_name = 'ego_vehicle'
 test_mode = 'where2comm' # full where2comm new_method single 分别为全通信，where2comm的通信，新方法通信，单车检测
-# test_mode = 'full'
 test_comm_ksize = 5 # comm kernel size 通信高斯卷积核的大小，用于放大heatmap
 
 train_pipline = [
@@ -100,7 +94,7 @@ train_pipline = [
     #     flip_ratio_bev_horizontal=0.5,
     #     flip_ratio_bev_vertical=0.5),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
-    dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range),
+    # dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range), # FIXME
     dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
     dict(type='ObjectNameFilterV2X', classes=classes),
     dict(type='ObjectTrackIDFilter', ids=[-1, ], impl=True),
@@ -109,7 +103,7 @@ train_pipline = [
     dict(
         type='Pack3DDetInputsV2X',
         keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id']
-        # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id']
+        # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id'] # validfilter impl
     ),
 ]
 
@@ -129,7 +123,7 @@ test_pipline = [
     dict(type='ConstructEGOBox'),
     # dict(type='ObjectSample', db_sampler=db_sampler),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
-    dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range),
+    # dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range), # FIXME
     dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
     dict(type='ObjectNameFilterV2X', classes=classes),
     dict(type='ObjectTrackIDFilter', ids=[-1, ], impl=True),
@@ -138,7 +132,7 @@ test_pipline = [
     dict(
         type='Pack3DDetInputsV2X',
         keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id']
-        # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id']
+        # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id'] # validfilter impl
     ),
 ]
 
@@ -157,23 +151,24 @@ train_scene_pipline = [
         alpha_coeff = 1,
         beta_coeff = 1,
         gamma_coeff = 2,
-        # visualizer_cfg = dict(
+        # visualizer_cfg = dict( # FIXME
         #     type='SimpleLocalVisualizer',
-        #     pc_range=cfg.lidar_range,
-        #     voxel_size=cfg.voxel_size,
+        #     pc_range=lidar_range,
+        #     voxel_size=voxel_size,
         #     name='visualizer',
         # ),
         # just_save_root = './data/gt_vis_data',
         # increment_save = True,
         verbose = False
     ),
-    dict(type='DestoryEGOBox', ego_id = -100),
+    dict(type='GatherHistoryPoint', pad_delay = pad_delay),
+    # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
     dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
-    dict(type='DropSceneKeys',keys=('seq',)),
+    dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
 ]
 
 test_scene_pipline = [
@@ -181,7 +176,7 @@ test_scene_pipline = [
     # dict(type=''),
     dict(
         type = 'CorrelationFilter',
-        ego_name = train_ego_name,
+        ego_name = test_ego_name,
         with_velocity = det_with_velocity,
         only_vehicle = False,
         vehicle_id_list = [0, 1, 2],
@@ -193,21 +188,22 @@ test_scene_pipline = [
         gamma_coeff = 2,
         # visualizer_cfg = dict( # FIXME
         #     type='SimpleLocalVisualizer',
-        #     pc_range=cfg.lidar_range,
-        #     voxel_size=cfg.voxel_size,
+        #     pc_range=lidar_range,
+        #     voxel_size=voxel_size,
         #     name='visualizer',
         # ),
         # just_save_root = './data/gt_vis_data',
         # increment_save = True,
         verbose = False
     ),
-    dict(type='DestoryEGOBox', ego_id = -100),
+    dict(type='GatherHistoryPoint', pad_delay = pad_delay),
+    # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
     dict(type='RemoveHistoryInputs'), # FIXME
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
-    dict(type='DropSceneKeys',keys=('seq',)),
+    dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
 ]
 
 train_dataloader = dict(
@@ -217,7 +213,7 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=True),
+          shuffle=False),
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path, # FIXME
@@ -260,7 +256,7 @@ test_dataloader = dict(
         co_agents = test_co_agents,
         filter_empty_gt = True,
         test_mode = True,
-        scene_shuffle = True,
+        scene_shuffle = False,
         with_velocity = det_with_velocity,
         adeptive_seq_length = True,
         scene_pipline = test_scene_pipline,
@@ -274,7 +270,7 @@ test_evaluator = dict(
 )
 
 model = dict(
-    type='ProjectModel',
+    type='CorrelationModel',
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
         voxel=True,
@@ -287,7 +283,7 @@ model = dict(
     ), # train, test voxel/pillar size
     pts_voxel_encoder = dict(
         type = 'PillarFeatureNet',
-        in_channels = 4,
+        in_channels = 5 if pad_delay else 4,
         feat_channels = (64, ),
         with_distance = False,
         with_cluster_center = True,
@@ -325,29 +321,29 @@ model = dict(
         upsample_cfg=dict(type='deconv', bias=False),
         use_conv_for_no_stride=True
     ),
-    pts_fusion_layer=dict(
-        type='V2XTransformerFusion',
-        in_channels=sum([128, 128, 128]),
-        n_head=3,
-        mid_channels=256,
-        dense_fusion=True,
-    ),
-    train_comm_expand_layer=dict(
-        type='GaussianConv',
-        kernel_size=train_comm_ksize,
-        sigma=1.0,
-        impl=True,
-    ),
-    test_comm_expand_layer=dict(
-        type='GaussianConv',
-        kernel_size=test_comm_ksize,
-        sigma=1.0,
-        impl=True,
-    ),
-    temporal_backbone=dict(
-        type='TemporalIdentity',
-        position='last'
-    ),
+    # pts_fusion_layer=dict(
+    #     type='V2XTransformerFusion',
+    #     in_channels=sum([128, 128, 128]),
+    #     n_head=3,
+    #     mid_channels=256,
+    #     dense_fusion=True,
+    # ),
+    # train_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=train_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
+    # test_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=test_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
+    # temporal_backbone=dict(
+    #     type='TemporalIdentity',
+    #     position='last'
+    # ),
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
@@ -366,6 +362,7 @@ model = dict(
             common_heads=det_common_heads,
             loss_cls=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
             loss_bbox=dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
+            loss_corr = dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
             separate_head=dict(
                 type='SeparateHead',
                 head_conv=64,
@@ -408,15 +405,16 @@ model = dict(
         pc_range=lidar_range[:2],
         test_mode=test_mode,
     ),
-    pts_fusion_cfg=dict(
-        train_ego_name=train_ego_name, # FIXME
-        test_ego_name=test_ego_name,
-        pc_range=lidar_range,
-    )
+    # pts_fusion_cfg=dict(
+    #     train_ego_name=train_ego_name, # FIXME
+    #     test_ego_name=test_ego_name,
+    #     pc_range=lidar_range,
+    # )
 )
 
 lr = 1 * 1e-4
 checkpoint_interval = 2
+log_interval = 1
 
 log_level = 'INFO'
 load_from = None
@@ -428,7 +426,7 @@ default_hooks = dict(
                 runtime_info=dict(type='RuntimeInfoHook'),
                 timer=dict(type='IterTimerHook'),
                 sampler_seed=dict(type='DistSamplerSeedHook'),
-                logger=dict(type='LoggerHook', interval=40),
+                logger=dict(type='LoggerHook', interval=log_interval),
                 param_scheduler=dict(type='ParamSchedulerHook'),
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
@@ -506,7 +504,7 @@ visualizer = dict(
     name='visualizer',
     pc_range=lidar_range,
     voxel_size=voxel_size,
-    mask_range=mask_range
+    # mask_range=mask_range # FIXME
 )
 
 # Default setting for scaling LR automatically

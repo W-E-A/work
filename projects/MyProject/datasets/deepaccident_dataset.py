@@ -4,7 +4,7 @@ from mmdet3d.datasets.det3d_dataset import Det3DDataset
 from mmengine.dataset import Compose
 import mmengine
 from mmengine.logging import print_log
-from logging import WARNING
+from logging import WARNING, INFO
 import numpy as np
 from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes
 import copy
@@ -45,6 +45,7 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
         self.with_velocity = with_velocity
         self.adeptive_seq_length = adeptive_seq_length
         self.scene_pipline = Compose(scene_pipline)
+        self.sample_interval = None
 
         # TODO: Redesign multi-view data process in the future
         assert load_type in ('frame_based', 'mv_image_based',
@@ -72,6 +73,14 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
             filter_empty_gt=filter_empty_gt,
             test_mode=test_mode,
             **kwargs)
+
+        # debug
+        # for index in range(len(self)):
+        #     print(f"sample : {index}")
+        #     dt = self.prepare_data(index)
+            # assert len(dt['example_seq'][2][1]['inputs']) > 0
+        # import pdb
+        # pdb.set_trace()
 
     def get_ann_info(self, index: int) -> dict:
         data_info = self.get_data_info(index)
@@ -195,8 +204,11 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
         for raw_data in raw_data_list:
             vehicle_name = raw_data['vehicle_name']
             scene_name = raw_data['scene_name']
+            if self.sample_interval is None:
+                self.sample_interval = raw_data['sample_interval']
             if vehicle_name in self.co_agents:
                 scene_data[scene_name][vehicle_name].append(self.parse_data_info(raw_data))
+
 
         data_list = []
         for scene_name, agent_data_dict in scene_data.items():
@@ -212,7 +224,9 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
                     data['scene_timestamps'] = [agent_data_dict[agent][i]['timestamp'] for i in range(len(agent_data_dict[agent]))]
             data['scene_length'] = len(data['scene_timestamps'])
             if self.adeptive_seq_length and data['scene_length'] - self.seq_length + 1 <= 0:
-                data['seq_length'] = data['scene_length']
+                # data['seq_length'] = data['scene_length']
+                print_log(f"Scenario '{scene_name}' has a length of '{data['scene_length']}', but requires {self.seq_length}, skip it!!!", level=WARNING)
+                continue
             else:
                 assert data['scene_length'] - self.seq_length + 1 > 0, f"The obtained sequence length is too long, maximum length {data['scene_length']}, required length {self.seq_length}"
             for i in range(data['seq_length'] - 1, data['scene_length'], self.key_interval): # 5 6 7 8 9 10 11 12 13 14
@@ -274,6 +288,8 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
                             level=WARNING)
                 seq[i][j] = example
         data_info['example_seq'] = seq
+        data_info['sample_interval'] = self.sample_interval
+
         return self.scene_pipline(data_info)
 
     def get_cat_ids(self, idx: int) -> dict:

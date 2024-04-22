@@ -12,6 +12,7 @@ import logging
 import copy
 import numpy as np
 from projects.MyProject import SimpleLocalVisualizer
+from to_gif import to_gif
 
 
 def log(msg = "" ,level: int = logging.INFO):
@@ -77,23 +78,21 @@ def build_dataset_like_runner(dataset_cfg):
 class CorrelationFilter(BaseTransform):
 
     def __init__(self,
-        # pc_range,
-        # voxel_size,
         ego_name: str = 'ego_vehicle',
         with_velocity: bool = True,
         only_vehicle: bool = False,
         vehicle_id_list: list = [0, 1, 2],
         ego_id: int = -100,
-        min_distance_thres: float = 0.5,
-        max_distance_thres: float = 15,
+        min_distance_thres: float = 5,
+        max_distance_thres: float = 20,
         alpha_coeff: float = 1,
+        beta_coeff: float = 1,
+        gamma_coeff: float = 2,
         visualizer_cfg: dict = None,
         just_save_root: str = None,
         increment_save: bool = True,
         verbose: bool = False
     ) -> None:
-        # self.pc_range = pc_range
-        # self.voxel_size = voxel_size
         self.ego_name = ego_name
         self.with_velocity = with_velocity
         self.only_vehicle = only_vehicle
@@ -102,6 +101,8 @@ class CorrelationFilter(BaseTransform):
         self.min_distance_thres = min_distance_thres
         self.max_distance_thres = max_distance_thres
         self.alpha_coeff = alpha_coeff
+        self.beta_coeff = beta_coeff
+        self.gamma_coeff = gamma_coeff
         self.visualizer = None
         if visualizer_cfg is not None:
             self.visualizer: SimpleLocalVisualizer = VISUALIZERS.build(visualizer_cfg)
@@ -109,29 +110,7 @@ class CorrelationFilter(BaseTransform):
         self.just_save_root = just_save_root
         self.increment_save = increment_save
         self.verbose = verbose
-
-        # self.voxel_size = np.array(self.voxel_size).astype(np.float32)
-
-        # self.grid_size = np.array([
-        #     np.ceil((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
-        #     np.ceil((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
-        #     np.ceil((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
-        # ]).astype(np.int32) # 1024 1024 1
-
-        # self.offset_xy = np.array([
-        #     self.pc_range[0] + self.voxel_size[0] * 0.5,
-        #     self.pc_range[1] + self.voxel_size[1] * 0.5
-        # ]).astype(np.float32)
-
-        # if self.visualize:
-        #     self.scatter_trans = np.array(
-        #         [[-1, 0],
-        #         [0, -1]],
-        #         dtype=np.float32
-        #     )
-        #     self.save_count = 0
-        #     self.fig, self.ax = plt.subplots(1, 1)
-
+        
         self.cmaps = [
             'Oranges', 'Greens', 'Purples', 'Oranges', 'PuRd', 'BuPu',
         ]
@@ -146,7 +125,7 @@ class CorrelationFilter(BaseTransform):
             target_center: np.ndarray,
             min_distance_thres: float,
             max_distance_thres: float,
-            alpha_coeff: float
+            alpha_coeff: float # 这个由网络轨迹预测给出轨迹的概率p，然后让(1 - p)表示如果轨迹概率为1，则少衰减比如0.5，概率接近0则多衰减比如2 ？？？？？
         ):
         assert ego_center.shape == target_center.shape
         assert len(ego_center.shape) == 2
@@ -155,7 +134,7 @@ class CorrelationFilter(BaseTransform):
         
         encounter_distance = np.linalg.norm(ego_center - target_center, axis=1)
         encounter_distance = np.clip(encounter_distance, min_distance_thres, max_distance_thres)
-        base_score = np.interp(encounter_distance, [min_distance_thres, max_distance_thres], [1, 1e-6])
+        base_score = np.interp(encounter_distance, [min_distance_thres, max_distance_thres], [1, 0])
         time_decay_coeff = np.exp(-alpha_coeff * np.linspace(0, 1, len(base_score)))
         time_decay_coeff = time_decay_coeff / np.sum(time_decay_coeff)
         decay_score = time_decay_coeff * base_score
@@ -168,41 +147,51 @@ class CorrelationFilter(BaseTransform):
         ego_vel: np.ndarray, # 2,
         target_center: np.ndarray, # 2,
         target_vel: np.ndarray, # 2,
+        target_label,
+        min_distance_thres: float,
+        beta_coeff: float, 
+        gamma_coeff: float,
+        weight = [1, 1, 1, 1, 1, 1, ]
     ):
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
         assert ego_center.shape == target_center.shape == ego_vel.shape == target_vel.shape
         assert len(ego_center) == 2 and len(ego_center.shape) == 1
             
-        r_vector = ego_center - target_center
+        rela_vector = ego_center - target_center
+        rela_vector_norm = np.linalg.norm(rela_vector, ord=2)
+        np.clip(rela_vector_norm, min_distance_thres, np.inf)
+        rela_vel = target_vel - ego_vel
+        rela_vel_norm = np.linalg.norm(rela_vel, ord=2)
+        ctheta = np.dot(rela_vector, rela_vel) / rela_vector_norm / rela_vel_norm
         
-
-
-        return 1.0
+        potential = weight[target_label] * np.exp(beta_coeff * rela_vel_norm * ctheta) / np.power(rela_vector_norm, gamma_coeff)
+        p_score = sigmoid(potential) - 0.5
+        return potential, p_score
 
 
     def transform(self, input_dict):
-        sample_idx = input_dict['sample_idx']
+        sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
+        sample_interval = input_dict['sample_interval'] # 序列采集间隔
         present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
         seq_length = input_dict['seq_length'] # 当前序列长度，比如6
         scene_name = input_dict['scene_name'] # 序列所属场景
-        seq_timestamp_0 = input_dict['seq_timestamps'][0] # 序列起始的时间戳，比如5
+        seq_timestamps = input_dict['seq_timestamps'] # 序列时间戳
         co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
         example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
-        future_seq_timestamps = range(seq_length)[present_idx:] # 取出未来帧的位置， 比如3, 4, 5
-        future_length = len(future_seq_timestamps) # 表明未来帧的长度，比如3
+        future_seq_position = range(seq_length)[present_idx:] # 取出未来帧在序列中的位置， 比如3, 4, 5
+        future_length = len(future_seq_position) # 表明未来帧的长度，比如3
         future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
         future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
         future_loc_matrix = input_dict['loc_matrix'][:, present_idx:, ...] # c x 4 4 # 未来帧ego的实际位置
 
         if self.verbose:
             log(scene_name)
-            log(input_dict['seq_timestamps'])
+            log(seq_timestamps)
 
         co_agents = {v : k for k, v in enumerate(co_agents)} # str : int
-
         assert self.ego_name in co_agents and self.ego_name != 'infrastructure'
         track_map_list = []
-        if self.with_velocity:
-            global_vel_list = [] # 其他代理的速度
         for agent, j in co_agents.items():
             if agent == self.ego_name:
                 # 如果处理的是ego则先得到ego的规划轨迹和关键帧相对于其他协同对象的变换矩阵
@@ -217,24 +206,10 @@ class CorrelationFilter(BaseTransform):
                     )
                     if self.verbose:
                         log(f"ego : {ego_present_vel}")
-                    # ego2globals = []
-                    # ego_global_vels = []
-                    # for i, timestamp in enumerate(future_seq_timestamps):
-                    #     ego_global_vels.append([
-                    #         example_seq[timestamp][j]['data_samples'].metainfo['vehicle_speed_x'],
-                    #         example_seq[timestamp][j]['data_samples'].metainfo['vehicle_speed_y']
-                    #     ])
-                        # ego2globals.append(np.linalg.inv(np.array(example_seq[timestamp][j]['data_samples'].metainfo['ego2global'])))
-                    # ego_global_vels = np.array(ego_global_vels, dtype=np.float32) # N, 2
-                    # ego2globals_rots = np.array(ego2globals, dtype=np.float32) # N, 4, 4
-                    # motion_rots = ego_motion_matrix[:, :3, :3]
-                    # global2ego_prescent_rots = np.linalg.inv(np.array(example_seq[present_idx][j]['data_samples'].metainfo['ego2global'], dtype=np.float32))[:2, :2]
-                    # ego_present_vels = ego_global_vels @ global2ego_prescent_rots.T # N, 2 ego的序列速度同一相对于present的结果
-
             else:
                 # 如果处理的是协同代理，则对于每个代理在时序上跟踪所有目标，相对于关键帧的轨迹，每个代理得到一个track_map
                 track_map = {}
-                for i, timestamp in enumerate(future_seq_timestamps):
+                for i, timestamp in enumerate(future_seq_position):
                     gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
 
                     if self.only_vehicle:
@@ -245,25 +220,23 @@ class CorrelationFilter(BaseTransform):
                         ego_mask = gt_instances_3d.track_id != self.ego_id
                         gt_instances_3d = gt_instances_3d[ego_mask]
 
-                    gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target
+                    # gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target bug do not modify
 
                     lidar2agent = np.array(example_seq[timestamp][j]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) # type: ignore
                     agent2present = future_motion_matrix[j][i]
                     lidar2present = lidar2agent @ agent2present
-                    if self.with_velocity:
-                        target_global_vel = gt_instances_3d.bboxes_3d.tensor[:, -2:].numpy() # origin vel
                     gt_instances_3d.bboxes_3d.rotate(lidar2present[:3, :3].T, None)
                     gt_instances_3d.bboxes_3d.translate(lidar2present[:3, 3]) # valid boxes to present
                     
                     for idx, id in enumerate(gt_instances_3d.track_id):
-                        bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # agent坐标系下其他目标的present的中心
-                        if self.with_velocity:
-                            bboxes_vel = target_global_vel[idx] # agent坐标系下其他目标的present的速度
-                        labels = gt_instances_3d.labels_3d[idx]
+                        bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # present坐标系下其他目标的present的中心
+                        bboxes_vel = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[-2:] # present velocity
+                        label = gt_instances_3d.labels_3d[idx]
                         if id not in track_map:
                             track_map[id] = {
                                 # 'color': self.cmaps[np.random.randint(0, len(self.cmaps))],
-                                'color': self.cmaps[labels],
+                                # 'color': self.cmaps[label],
+                                'label': label,
                                 'center': [],
                                 'vel': [],
                                 'start': i
@@ -272,13 +245,6 @@ class CorrelationFilter(BaseTransform):
                         if self.with_velocity:
                             track_map[id]['vel'].append(bboxes_vel)
                 track_map_list.append(track_map)
-
-                if self.with_velocity:
-                    global_vel_list.append(np.array(
-                        [example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_x'],
-                         example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_y']],
-                         dtype=np.float32
-                    ))
 
         ego_dix = co_agents.pop(self.ego_name) # ignore the ego
 
@@ -290,68 +256,89 @@ class CorrelationFilter(BaseTransform):
             rela_matrix = np.stack([trans @ ego_motion_matrix[k] for k in range(future_length)], axis=0) # type: ignore
             rela_centers = rela_matrix[:, :2, 3] # x 2
             if self.with_velocity:
-                rots = np.linalg.inv(future_loc_matrix[j, 0, ...])[:2, :2] # 世界相对于代理的rot
-                rela_vel = (ego_present_vel - global_vel_list[i]) @ rots.T # N, 2 绝对速度 - 牵连速度 = 相对速度，相对速度在代理处的表达
+                rots = np.linalg.inv(future_loc_matrix[j, 0, ...])[:2, :2]# 每个ego速度对于世界，先转到对于present的代理描述下
+                trans_rot = trans[:2, :2] # ego和代理之间具有相对运动，参考上述的motion通过当前的trans转到代理下
+                rela_vel = ego_present_vel @ rots.T @ trans_rot.T
 
             if self.visualizer:
-                # rela_centers_vis = rela_centers @ self.scatter_trans.T # type: ignore
                 self.visualizer.set_points_from_npz(example_seq[present_idx][j]['data_samples'].metainfo["lidar_path"])
             
             # 对于每个协同代理的检测结果（这里是真值），计算其和ego轨迹的关系
             result_dict = {}
+            if self.with_velocity:
+                potential_dict = {}
             for id, v in track_map.items():
                 # 对于每一条轨迹
-                color = v['color'] # 类型颜色
+                # color = v['color'] # 类型颜色
                 start = v['start'] # 开始跟踪的时间戳
                 centers = np.stack(v['center'], axis=0) # N, 2 # 轨迹中心点
                 cmp_centers = rela_centers[start:start + len(centers)] # N, 2 这里保证ego是从头开始的，因此在有效预测目标轨迹的时间段对比
-                correlation_score = 1e-6
+                correlation_score = 0
                 motion_score = self.linear_motion_score(
                     cmp_centers, centers, self.min_distance_thres, self.max_distance_thres, self.alpha_coeff
                 )
                 if self.with_velocity:
-                    potential_score = 1e-6
+                    p_score = 0
                     if start == 0: # 忽略当前之后再出现的目标的速度
                         vel = v['vel'][start]
+                        label = v['label']
                         if self.verbose:
                             log(f"{id} : {vel}")
-                        vel = (vel - global_vel_list[i]) @ rots.T # 目标相对于代理的速度，然后在代理处的表达
-                        potential_score = self.potential_score(
-                            cmp_centers[0], rela_vel, centers[0], vel # N, 2 -> present frame info for potential score
+                        potential, p_score = self.potential_score(
+                            cmp_centers[0],
+                            rela_vel,
+                            centers[0],
+                            vel,
+                            label,
+                            self.min_distance_thres,
+                            self.beta_coeff,
+                            self.gamma_coeff
                         )
-                        correlation_score = motion_score * potential_score
+                        correlation_score = motion_score * 0.5 + p_score
                 else:
                     correlation_score = motion_score
                 result_dict[id] = correlation_score
+                if self.with_velocity:
+                    potential_dict[id] = p_score # potential
 
                 if self.visualizer:
-                    if self.with_velocity:
-                        cmp_vel_vector = np.stack([cmp_centers[0], cmp_centers[0] + 0.5 * rela_vel]) # 2, 2
-                        vel_vector = np.stack([centers[0], centers[0] + 0.5 * vel]) # 2, 2
-                        self.visualizer.draw_points(vel_vector, colors='r', sizes = 100)
-                        self.visualizer.draw_points(cmp_vel_vector, colors='g', sizes = 100)
-                    # centers_vis = centers @ self.scatter_trans.T # type: ignore
+                    if self.with_velocity and start == 0:
+                        vel_vector = np.stack([centers[0], centers[0] + sample_interval * 0.1 * vel]) # 2, 2
+                        self.visualizer.draw_arrows(vel_vector, fc = 'r', ec = 'r', width = 6, head_width = 12, head_length = 10)
                     self.visualizer.draw_points(centers, colors=np.linspace(0.0, 1.0, len(centers))[::-1], sizes = 40, cmap='Greens')
             
             correlation_scores = np.array([result_dict[id] if id in result_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
+            potentials = np.array([potential_dict[id] if id in potential_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
+            
             present_instances_3d['correlation'] = correlation_scores
             example_seq[present_idx][j]['data_samples'].gt_instances_3d = present_instances_3d
             if self.visualizer:
                 self.visualizer.draw_points(rela_centers, colors=np.linspace(0.0, 1.0, future_length)[::-1], sizes = 80, cmap='Blues')
+                if self.with_velocity:
+                    rela_vel_vector = np.stack([rela_centers[0], rela_centers[0] + sample_interval * 0.1 * rela_vel])
+                    self.visualizer.draw_arrows(rela_vel_vector, fc = 'm', ec = 'm', width = 6, head_width = 12, head_length = 10)
                 self.visualizer.draw_bev_bboxes(present_instances_3d.bboxes_3d, c='#FF8000')
                 correlation_scores_str = [f"{s:.2f}" for s in list(correlation_scores)]
                 self.visualizer.draw_texts(
                     correlation_scores_str,
                     present_instances_3d.bboxes_3d.gravity_center[..., :2],
-                    font_sizes = 15,
-                    colors = 'yellow',
+                    font_sizes = 12,
+                    colors = '#FFFF00',
                     vertical_alignments = 'top',
                     horizontal_alignments = 'left')
+                potentials_str = [f"{s:.2f}" for s in list(potentials)]
+                self.visualizer.draw_texts(
+                    potentials_str,
+                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                    font_sizes = 12,
+                    colors = '#00FFFF',
+                    vertical_alignments = 'top',
+                    horizontal_alignments = 'right')
                 self.visualizer.draw_texts(
                     present_instances_3d.track_id.tolist(),
                     present_instances_3d.bboxes_3d.gravity_center[..., :2],
-                    font_sizes = 15,
-                    colors = 'yellow',
+                    font_sizes = 12,
+                    colors = '#FF00FF',
                     vertical_alignments = 'bottom',
                     horizontal_alignments = 'right')
 
@@ -360,7 +347,7 @@ class CorrelationFilter(BaseTransform):
                     log(correlation_scores)
                     log(agent)
                 if self.increment_save:
-                    self.visualizer.just_save(os.path.join(self.just_save_root, f"in_{agent}_{time.time_ns()}.png"))
+                    self.visualizer.just_save(os.path.join(self.just_save_root, f"{sample_idx}_in_{agent}_{time.time_ns()}.png"))
                 else:
                     self.visualizer.just_save(os.path.join(self.just_save_root, f"in_{agent}.png"))
                 self.visualizer.clean()
@@ -400,9 +387,11 @@ def analyze_data(cfg, save_path, verbose):
         only_vehicle = False,
         vehicle_id_list = [0, 1, 2],
         ego_id = -100,
-        min_distance_thres = 0.5,
-        max_distance_thres = 15,
+        min_distance_thres = 5,
+        max_distance_thres = 20,
         alpha_coeff = 1,
+        beta_coeff = 1,
+        gamma_coeff = 2,
         visualizer_cfg = dict(
             type='SimpleLocalVisualizer',
             pc_range=cfg.lidar_range,
@@ -422,11 +411,13 @@ def analyze_data(cfg, save_path, verbose):
     for i in range(dataset_len):
         _ = dataset[i]
 
-        import pdb
-        pdb.set_trace()
+        # import pdb
+        # pdb.set_trace()
 
         if i > 60:
             break
+    
+    to_gif(save_path, 2)
     
 def main():
     args = parse_args()
