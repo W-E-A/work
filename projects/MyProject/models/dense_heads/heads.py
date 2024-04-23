@@ -18,65 +18,6 @@ from mmdet3d.structures import Det3DDataSample, xywhr2xyxyr
 from mmdet3d.models.dense_heads.centerpoint_head import circle_nms, nms_bev
 import math
 
-# @MODELS.register_module()
-# class MotionHead(BaseModule):
-#     def __init__(self,
-#                  in_channels: int = 128,
-#                  inner_channels: Optional[int] = None,
-#                  history_length: int = 3,
-#                  future_length: int = 1,
-#                  future_discount: float = 0.95,
-#                  future_dim: int = 6,
-#                  common_heads: Optional[List[dict]] = None,
-#                  num_gru_blocks: int = 3,
-#                  prob_enable: bool = True,
-#                  prob_on_foreground: bool = False,
-#                  prob_spatially: bool = False,
-#                  prob_each_future: bool = False,
-#                  prob_latent_dim: int = 32,
-#                  distribution_log_sigmas: tuple = (-5.0, 5.0),
-#                  detach_state=True,
-#                  norm_cfg: dict = dict(type='BN2d'),
-#                  init_bias: float = -2.19,
-#                  train_cfg: Optional[dict] = None,
-#                  test_cfg: Optional[dict] = None,
-#                  init_cfg: Union[dict, List[dict], None] = None,
-
-#                  class_weights=None,
-#                  use_topk=True,
-#                  topk_ratio=0.25,
-#                  ignore_index=255,
-#                  posterior_with_label=False,
-#                  sample_ignore_mode='all_valid',
-#                  using_focal_loss=False,
-#                  focal_cfg=dict(type='mmdet.GaussianFocalLoss', reduction='none'),
-#                  loss_weights=None,
-#                  ):
-#         super(MotionHead, self).__init__(init_cfg=init_cfg)
-#         # FIXME
-
-#         self.in_channels = in_channels
-#         self.inner_channels = inner_channels
-#         self.history_length = history_length
-#         self.future_length = future_length
-#         self.future_discount = future_discount
-#         self.future_dim = future_dim
-#         self.train_cfg = train_cfg
-#         self.test_cfg = test_cfg
-    
-#     def forward_single(self, x: Tensor, ) -> List[dict]:
-#         N, C, H, W = x.shape
-#         if self.future_length > 0:
-#             pass
-#         else:
-#             pass
-
-#     def forward(self, feats: Union[Tensor, List[Tensor]], ) -> Tuple[List[Tensor]]:
-#         if not isinstance(feats, Sequence):
-#             feats = [feats]
-#         return multi_apply(self.forward_single, feats, ) # type: ignore
-
-
 @MODELS.register_module()
 class MTHead(BaseModule):
     def __init__(

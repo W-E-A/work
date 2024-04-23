@@ -201,71 +201,71 @@ def warp_features(
     return warped_x
 
 
-# def cumulative_warp_features(x, flow, mode='nearest', spatial_extent=None):
-#     """ Warps a sequence of feature maps by accumulating incremental 2d flow.
+def cumulative_warp_features(x, flow, mode='nearest', spatial_extent=None):
+    """ Warps a sequence of feature maps by accumulating incremental 2d flow.
 
-#     x[:, -1] remains unchanged
-#     x[:, -2] is warped using flow[:, -2]
-#     x[:, -3] is warped using flow[:, -3] @ flow[:, -2]
-#     ...
-#     x[:, 0] is warped using flow[:, 0] @ ... @ flow[:, -3] @ flow[:, -2]
+    x[:, -1] remains unchanged
+    x[:, -2] is warped using flow[:, -2]
+    x[:, -3] is warped using flow[:, -3] @ flow[:, -2]
+    ...
+    x[:, 0] is warped using flow[:, 0] @ ... @ flow[:, -3] @ flow[:, -2]
 
-#     Args:
-#         x: (b, t, c, h, w) sequence of feature maps
-#         flow: (b, t, 6) sequence of 6 DoF pose
-#             from t to t+1 (only uses the xy poriton)
+    Args:
+        x: (b, t, c, h, w) sequence of feature maps
+        flow: (b, t, 6) sequence of 6 DoF pose
+            from t to t+1 (only uses the xy poriton)
 
-#     """
-#     sequence_length = x.shape[1]
-#     if sequence_length == 1:
-#         return x
+    """
+    sequence_length = x.shape[1]
+    if sequence_length == 1:
+        return x
 
-#     flow = pose_vec2mat(flow)
+    flow = vec2mat(flow)
 
-#     out = [x[:, -1]]
-#     cum_flow = flow[:, -2]
-#     for t in reversed(range(sequence_length - 1)):
-#         out.append(warp_features(x[:, t], mat2pose_vec(
-#             cum_flow), mode=mode, spatial_extent=spatial_extent))
-#         # @ is the equivalent of torch.bmm
-#         cum_flow = flow[:, t - 1] @ cum_flow
+    out = [x[:, -1]]
+    cum_flow = flow[:, -2]
+    for t in reversed(range(sequence_length - 1)):
+        out.append(warp_features(x[:, t], mat2vec(
+            cum_flow), mode=mode, spatial_extent=spatial_extent))
+        # @ is the equivalent of torch.bmm
+        cum_flow = flow[:, t - 1] @ cum_flow
 
-#     return torch.stack(out[::-1], 1)
+    return torch.stack(out[::-1], 1)
 
 
-# def cumulative_warp_features_reverse(x, flow, mode='nearest', spatial_extent=None, bev_transform=None):
-#     """ Warps a sequence of feature maps by accumulating incremental 2d flow.
+def cumulative_warp_features_reverse(x, flow, mode='nearest', spatial_extent=None, bev_transform=None):
+    """ Warps a sequence of feature maps by accumulating incremental 2d flow.
 
-#     x[:, 0] remains unchanged
-#     x[:, 1] is warped using flow[:, 0].inverse()
-#     x[:, 2] is warped using flow[:, 0].inverse() @ flow[:, 1].inverse()
-#     ...
+    x[:, 0] remains unchanged
+    x[:, 1] is warped using flow[:, 0].inverse()
+    x[:, 2] is warped using flow[:, 0].inverse() @ flow[:, 1].inverse()
+    ...
 
-#     Args:
-#         x: (b, t, c, h, w) sequence of feature maps
-#         flow: (b, t, 6) sequence of 6 DoF pose
-#             from t to t+1 (only uses the xy poriton)
+    Args:
+        x: (b, t, c, h, w) sequence of feature maps
+        flow: (b, t, 6) sequence of 6 DoF pose
+            from t to t+1 (only uses the xy poriton)
 
-#     """
+    """
 
-#     flow = pose_vec2mat(flow)
-#     out = [x[:, 0]]
+    flow = vec2mat(flow)
+    out = [x[:, 0]]
 
-#     for i in range(1, x.shape[1]):
-#         if i == 1:
-#             cum_flow = invert_pose_matrix(flow[:, 0])
-#         else:
-#             cum_flow = cum_flow @ invert_pose_matrix(flow[:, i - 1])
+    for i in range(1, x.shape[1]):
+        if i == 1:
+            cum_flow = invert_pose_matrix(flow[:, 0])
+        else:
+            cum_flow = cum_flow @ invert_pose_matrix(flow[:, i - 1])
 
-#         # cum_flow only represents the ego_motion, while bev_transform needs extra processing
-#         if bev_transform is not None:
-#             # points 先做 inverse_bev_transform，再做 motion 变换，再做 bev_transform
-#             # warp_flow = bev_transform @ cum_flow @ bev_transform.inverse()
-#             warp_flow = bev_transform.inverse() @ cum_flow @ bev_transform
-#         else:
-#             warp_flow = cum_flow.clone()
+        # cum_flow only represents the ego_motion, while bev_transform needs extra processing
+        if bev_transform is not None:
+            # points 先做 inverse_bev_transform，再做 motion 变换，再做 bev_transform
+            # warp_flow = bev_transform @ cum_flow @ bev_transform.inverse()
+            warp_flow = bev_transform.inverse() @ cum_flow @ bev_transform
+        else:
+            warp_flow = cum_flow.clone()
 
-#         out.append(warp_features(x[:, i], mat2pose_vec(
-#             warp_flow), mode, spatial_extent=spatial_extent))
+        out.append(warp_features(x[:, i], mat2vec(
+            warp_flow), mode, spatial_extent=spatial_extent))
 
-#     return torch.stack(out, 1)
+    return torch.stack(out, 1)

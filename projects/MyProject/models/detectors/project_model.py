@@ -8,7 +8,7 @@ from ..utils import warp_features
 import copy
 from mmdet3d.structures import Det3DDataSample
 from mmengine.structures import InstanceData
-from ..visualization import SimpleLocalVisualizer
+from ...visualization import SimpleLocalVisualizer
 import numpy as np
 
 @MODELS.register_module()

@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 from mmengine.logging import print_log
 import logging
-from ..visualization import SimpleLocalVisualizer
+from ...visualization import SimpleLocalVisualizer
 from mmdet3d.structures import Det3DDataSample
 
 
