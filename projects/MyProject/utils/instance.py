@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from .geometry import mat2_vec, vec2mat, warp_features
+from .geometry import mat2vec, vec2mat, warp_features
 import math
 import pdb
 from skimage.measure import find_contours, approximate_polygon
@@ -25,7 +25,7 @@ def convert_instance_mask_to_center_and_offset_label(instance_img, future_egomot
                           torch.arange(w, dtype=torch.float), indexing='ij')
 
     if subtract_egomotion:
-        future_egomotion_inv = mat2_vec(
+        future_egomotion_inv = mat2vec(
             vec2mat(future_egomotion).inverse())
 
     # Compute warped instance segmentation

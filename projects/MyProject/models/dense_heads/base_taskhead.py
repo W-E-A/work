@@ -1,15 +1,12 @@
 import torch
 import torch.nn as nn
-from mmcv.runner import BaseModule
-from mmcv.cnn import build_norm_layer
-from mmdet3d.models.builder import HEADS
-
-from mmcv.runner import auto_fp16, force_fp32
+from mmengine.model import BaseModule
+from mmdet3d.registry import MODELS
 
 import pdb
 
 
-@HEADS.register_module()
+@MODELS.register_module()
 class BaseTaskHead(BaseModule):
     def __init__(self, task_dict, in_channels, inter_channels=None,
                  init_cfg=dict(type='Kaiming', layer='Conv2d'),

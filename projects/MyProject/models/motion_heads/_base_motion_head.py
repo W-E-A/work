@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from mmdet3d.models.builder import HEADS
+from mmdet3d.registry import MODELS
 
 from ..dense_heads.base_taskhead import BaseTaskHead
 from ..dense_heads.loss_utils import MotionSegmentationLoss, SpatialRegressionLoss, ProbabilisticLoss, GaussianFocalLoss, SpatialProbabilisticLoss
@@ -12,13 +12,12 @@ from ...utils.warper import FeatureWarper
 
 # from ...visualize import Visualizer
 from ..modules.motion_modules import ResFuturePrediction, SpatialDistributionModule, DistributionModule
-from mmcv.runner import auto_fp16, force_fp32
 import scipy
 
 import pdb
 
 
-@HEADS.register_module()
+@MODELS.register_module()
 class BaseMotionHead(BaseTaskHead):
     def __init__(
         self,
@@ -414,7 +413,6 @@ class BaseMotionHead(BaseTaskHead):
 
         return labels, future_distribution_inputs
 
-    @force_fp32(apply_to=('predictions'))
     def loss(self, predictions, targets=None):
         loss_dict = {}
 

@@ -2,11 +2,10 @@ from matplotlib.pyplot import autoscale
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmdet3d.models.builder import build_loss
+from mmdet3d.registry import MODELS
 from mmdet3d.models.utils import clip_sigmoid
 
 import pdb
-from mmcv.runner import auto_fp16, force_fp32
 
 
 class BinarySegmentationLoss(torch.nn.Module):
@@ -128,7 +127,7 @@ class GaussianFocalLoss(nn.Module):
     ):
         super().__init__()
 
-        self.gaussian_focal_loss = build_loss(focal_cfg)
+        self.gaussian_focal_loss = MODELS.build(focal_cfg)
         self.ignore_index = ignore_index
         self.future_discount = future_discount
 

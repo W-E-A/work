@@ -1,20 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmdet3d.models.builder import HEADS
+from mmdet3d.registry import MODELS
 from ..dense_heads.base_taskhead import BaseTaskHead
 from ..dense_heads.loss_utils import MotionSegmentationLoss, SpatialRegressionLoss, ProbabilisticLoss, GaussianFocalLoss, SpatialProbabilisticLoss
-from ...datasets.utils.geometry import cumulative_warp_features_reverse
-from ...datasets.utils.instance import predict_instance_segmentation_and_trajectories
-from ...datasets.utils.warper import FeatureWarper
+from ...utils.instance import predict_instance_segmentation_and_trajectories
+from ...utils.warper import FeatureWarper
 
-from ..motion_modules import ResFuturePrediction, ResFuturePredictionV2
+from ..modules.motion_modules import ResFuturePrediction, ResFuturePredictionV2
 from ._base_motion_head import BaseMotionHead
 
 import pdb
 
 
-@HEADS.register_module()
+@MODELS.register_module()
 class IterativeFlow(BaseMotionHead):
     def __init__(
         self,
