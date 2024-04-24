@@ -121,7 +121,7 @@ class MotionSegmentationLoss(nn.Module):
 class GaussianFocalLoss(nn.Module):
     def __init__(
         self,
-        focal_cfg=dict(type='GaussianFocalLoss', reduction='none'),
+        focal_cfg=dict(type='mmdet.GaussianFocalLoss', reduction='none'),
         ignore_index=255,
         future_discount=1.0,
     ):

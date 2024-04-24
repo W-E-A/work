@@ -48,7 +48,7 @@ class BaseMotionHead(BaseTaskHead):
         posterior_with_label=False,
         sample_ignore_mode='all_valid',
         using_focal_loss=False,
-        focal_cfg=dict(type='GaussianFocalLoss', reduction='none'),
+        focal_cfg=dict(type='mmdet.GaussianFocalLoss', reduction='none'),
         loss_weights=None,
         # settings: others
         train_cfg=None,
@@ -64,7 +64,6 @@ class BaseMotionHead(BaseTaskHead):
         self.init_bias = -2.19
 
         self.in_channels = in_channels
-        self.spatial_extent = (grid_conf['xbound'][1], grid_conf['ybound'][1])
         self.receptive_field = receptive_field
         self.n_future = n_future
         self.probabilistic_enable = probabilistic_enable

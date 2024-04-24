@@ -44,7 +44,7 @@ class MTHead(BaseModule):
             motion_head.update(test_cfg=self.test_cfg)
             self.motion_head = MODELS.build(motion_head)
 
-    def forward(self, feats: Union[Tensor, List[Tensor]]) -> dict:
+    def forward(self, feats: Union[Tensor, List[Tensor]], targets=None) -> dict:
         return_dict = {}
         if not isinstance(feats, Sequence):
             feats = [feats]
@@ -52,7 +52,7 @@ class MTHead(BaseModule):
             multi_tasks_multi_feats: Tuple[List[Tensor]] = self.det_head(feats)
             return_dict['det_feat'] = multi_tasks_multi_feats # [[t1,],[t2,],[...]]
         if self.motion_head:
-            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.motion_head(feats)
+            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.motion_head(feats, targets)
             return_dict['motion_feat'] = multi_tasks_multi_feats
 
         return return_dict

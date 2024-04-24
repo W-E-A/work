@@ -10,7 +10,6 @@ from ...utils.warper import FeatureWarper
 from ..modules.motion_modules import ResFuturePrediction, ResFuturePredictionV2
 from ._base_motion_head import BaseMotionHead
 
-import pdb
 
 
 @MODELS.register_module()
@@ -52,8 +51,7 @@ class IterativeFlow(BaseMotionHead):
         2. iteratively get future states with ConvGRU
         3. decode present & future states with the decoder heads
         '''
-        # import pdb
-        # pdb.set_trace()
+        import pdb;pdb.set_trace()
         bevfeats = bevfeats[0]
 
         # visualize_feature(bevfeats)

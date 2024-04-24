@@ -47,7 +47,7 @@ det_common_heads = dict(
 )
 
 # train params
-train_batch_size = 4
+train_batch_size = 1
 train_num_workers = 8
 train_seq_length = 8
 train_present_idx = 2
@@ -102,7 +102,8 @@ train_pipline = [
     dict(type='PointShuffle'),
     dict(
         type='Pack3DDetInputsV2X',
-        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id']
+        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id','future_egomotions',
+        'motion_segmentation', 'motion_instance', 'instance_centerness', 'instance_offset', 'instance_flow']
         # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id'] # validfilter impl
     ),
 ]
@@ -373,6 +374,34 @@ model = dict(
             num_heatmap_convs=2,
             norm_bbox=True,
             with_velocity=det_with_velocity,
+        ),
+        motion_head=dict(
+            type='IterativeFlow',
+            task_dict={
+                'segmentation': 2,
+                'instance_center': 1,
+                'instance_offset': 2,
+                'instance_flow': 2,
+            },
+            distribution_log_sigmas=[-5.0, 5.0],
+            class_weights=[1.0, 2.0],
+            in_channels=384,
+            prob_latent_dim=32,
+            receptive_field=3,
+            n_future=5,
+            using_spatial_prob=True,
+            using_focal_loss=True,
+            n_gru_blocks=1,
+            future_discount=1,
+            loss_weights={
+                'loss_motion_seg': 5.0,
+                'loss_motion_centerness': 1.0,
+                'loss_motion_offset': 1.0,
+                'loss_motion_flow': 1.0,
+                'loss_motion_prob': 10.0,
+            },
+            sample_ignore_mode='past_valid',
+            posterior_with_label=False,
         ),
     ),
     pts_train_cfg=dict(

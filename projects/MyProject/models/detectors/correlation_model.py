@@ -202,7 +202,7 @@ class CorrelationModel(MVXTwoStageDetector):
             meat_list.append(input_metas)
         
         if mode == 'loss':
-            single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id]) # out from dethead and motionhead
+            single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id], ins_list[self.inf_id]) # out from dethead and motionhead
 
             heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(ins_list[self.inf_id]) # B
             single_det_gt = {

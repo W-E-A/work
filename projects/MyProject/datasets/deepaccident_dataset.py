@@ -75,12 +75,12 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
             **kwargs)
 
         # debug
-        # for index in range(len(self)):
-        #     print(f"sample : {index}")
-        #     dt = self.prepare_data(index)
-            # assert len(dt['example_seq'][2][1]['inputs']) > 0
-        # import pdb
-        # pdb.set_trace()
+        for index in range(len(self)):
+            print(f"sample : {index}")
+            dt = self.prepare_data(index)
+            assert len(dt['example_seq'][2][1]['inputs']) > 0
+        import pdb
+        pdb.set_trace()
 
     def get_ann_info(self, index: int) -> dict:
         data_info = self.get_data_info(index)
@@ -243,6 +243,7 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
         return data_list
     
     def prepare_data(self, index: int) -> Union[dict, None]:
+        import pdb;pdb.set_trace()
         data_info = self.get_data_info(index)
         co_agents = data_info['co_agents']
         seq_timestamps = data_info['seq_timestamps']
