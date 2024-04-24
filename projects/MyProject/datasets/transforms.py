@@ -9,9 +9,8 @@ from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes, Dept
 from mmdet3d.datasets.transforms.formating import Pack3DDetInputs
 from os import path as osp
 import copy
-import torch
 import cv2
-from ..utils import calc_relative_pose, mat2vec
+from ..utils import calc_relative_pose, convert_instance_mask_to_center_and_offset_label
 import matplotlib.pyplot as plt
 import torch
 import os
@@ -371,140 +370,147 @@ class GatherV2XPoseInfo(BaseTransform):
         input_dict['loc_matrix'] = seq_loc_matrix # seq, co, 4, 4
 
         future_motion_matrix = []
+        future_motion_rela_matrix = []
         for j in range(co_length):
             future_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in future_seq]
+            temp = [np.eye(4, dtype=np.float32)]
+            temp.extend(list(map(calc_relative_pose, future_motion_list[1:], future_motion_list[:-1])))
+            future_motion_rela_matrix.append(np.stack(temp, axis=0))
             future_motion_matrix.append(np.stack(calc_relative_pose(future_motion_list[0], future_motion_list), axis=0)) # type: ignore
         future_motion_matrix = np.stack(future_motion_matrix, axis=0) # NOTE starts with identity
+        future_motion_rela_matrix = np.stack(future_motion_rela_matrix, axis=0) # NOTE starts with identity
         input_dict['future_motion_matrix'] = future_motion_matrix # co seq 4 4 
-        # FIXME
-        # FIXME NOT MOTION !
-        # FIXME MOTION must be 6 DOF rela (k-1)_k ...
-        
+        input_dict['future_motion_rela_matrix'] = future_motion_rela_matrix # co seq 4 4 
         return input_dict
 
 
 @TRANSFORMS.register_module()
-class ConvertMotionLabels(BaseTransform):
-    """
-    FIXME
-    FIXME
-    FIXME
-    FIXME
+class MakeMotionLabels(BaseTransform):
 
-    """
+
     def __init__(self,
-                 pc_range,
-                 voxel_size,
-                 ego_id: int = -100,
-                 ignore_index:int = 255,
-                 filter_invalid: bool = True,
-                 only_vehicle: bool = False,
-                 vehicle_id_list: list = [0, 1, 2],
-                 ) -> None:
+        pc_range,
+        voxel_size,
+        ego_id: int = -100,
+        only_vehicle: bool = False,
+        vehicle_id_list: list = [0, 1, 2],
+        filter_invalid: bool = True,
+        ignore_index:int = 255,
+        visualizer_cfg: dict = None,
+        just_save_root: str = None,
+        ) -> None:
         self.pc_range = pc_range
         self.voxel_size = voxel_size
-        self.ego_id = ego_id
-        self.ignore_index = ignore_index
-        self.filter_invalid = filter_invalid
-        self.only_vehicle = only_vehicle
-        self.vehicle_id_list = vehicle_id_list
-
         self.voxel_size = np.array(self.voxel_size).astype(np.float32)
-
         self.grid_size = np.array([
-            np.ceil((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
-            np.ceil((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
-            np.ceil((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
+            np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
+            np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
+            np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
         ]).astype(np.int32)
-
         self.offset_xy = np.array([
             self.pc_range[0] + self.voxel_size[0] * 0.5,
             self.pc_range[1] + self.voxel_size[1] * 0.5
         ]).astype(np.float32)
+        self.warp_size = (0.5 * (self.pc_range[3] - self.pc_range[0]), 0.5 * (self.pc_range[4] - self.pc_range[1]))
+        self.ego_id = ego_id
+        self.only_vehicle = only_vehicle
+        self.vehicle_id_list = vehicle_id_list
+        self.filter_invalid = filter_invalid
+        self.ignore_index = ignore_index
+        if visualizer_cfg is not None:
+            self.visualizer: SimpleLocalVisualizer = VISUALIZERS.build(visualizer_cfg)
+            assert just_save_root != None
+            os.makedirs(just_save_root, exist_ok=True)
+        self.just_save_root = just_save_root
 
-    def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
-        present_idx = input_dict['present_idx']
-        seq_length = input_dict['seq_length']
-        co_agents = input_dict['co_agents']
-        example_seq = input_dict['example_seq']
-        future_seq_timestamps = range(seq_length)[present_idx:]
-        future_motion_matrix = input_dict['motion_matrix'][:, present_idx:] # c x 4 4
+    def transform(self, input_dict) -> Union[Dict,Tuple[List, List],None]:
+        sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
+        sample_interval = input_dict['sample_interval'] # 序列采集间隔
+        present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
+        seq_length = input_dict['seq_length'] # 当前序列长度，比如6
+        scene_name = input_dict['scene_name'] # 序列所属场景
+        seq_timestamps = input_dict['seq_timestamps'] # 序列时间戳
+        co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
+        example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
+        future_seq_position = range(seq_length)[present_idx:] # 取出未来帧在序列中的位置， 比如3, 4, 5
+        future_length = len(future_seq_position) # 表明未来帧的长度，比如3
+        # future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
+        # future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
+        # future_loc_matrix = input_dict['loc_matrix'][present_idx:, :, ...] # c x 4 4 # 未来帧ego的实际位置
+        future_motion_rela_matrix = input_dict['future_motion_rela_matrix'] # c x 4 4 未来帧对于前一帧的位姿关系
 
-        track_instance_map = {}
         for j, agent in enumerate(co_agents):
+            
+            track_map = {}
             segmentations = []
             instances = []
-            for i in future_seq_timestamps:
+            for i, timestamp in enumerate(future_seq_position):
+                gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
 
-                data_samples = example_seq[i][j]['data_samples']
-
-                gt_instances_3d = data_samples.gt_instances_3d.clone() # agent -> seq -> data_info
-
-                segmentation = np.zeros((self.grid_size[0], self.grid_size[1]))
-                instance = copy.deepcopy(segmentation)
+                if gt_instances_3d.bboxes_3d == None:
+                    segmentation = np.ones(
+                        (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
+                    instance = np.ones_like(segmentation) * self.ignore_index
+                else:
+                    segmentation = np.zeros((self.grid_size[0], self.grid_size[1])) # H, W
+                    instance = np.zeros_like(segmentation)    
 
                 if self.only_vehicle:
                     vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
                     gt_instances_3d = gt_instances_3d[vehicle_mask]
-
-                lidar2ego = np.array(data_samples.metainfo['lidar2ego'], dtype=torch.float32) # type: ignore
-                gt_instances_3d.bboxes_3d.rotate(lidar2ego[:3, :3].T, None)
-                gt_instances_3d.bboxes_3d.translate(lidar2ego[:3, 3])
-
+                
                 if agent != 'infrastructure':
-                    ego_instance = gt_instances_3d[gt_instances_3d.track_id == self.ego_id]
-                    ego_bev_corners = ego_instance.bboxes_3d.corners[0, [0, 3, 7, 4], :2].numpy() # cpu tensor -> numpy corners N 8 3， clockwise
-                    # [1, 4, 2]
-                    ego_bev_corners_voxel = np.round((ego_bev_corners + self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
-
-                    if self.ego_id not in track_instance_map:
-                        track_instance_map[self.ego_id] = len(track_instance_map) + 1
-                    color = track_instance_map[self.ego_id] # color
-
-                    poly_region = ego_bev_corners_voxel[0]
-
-                    cv2.fillPoly(segmentation, [poly_region], 1.0) # type: ignore seg
-                    cv2.fillPoly(instance, [poly_region], color) # instance seg
-
+                    ego_mask = gt_instances_3d.track_id != self.ego_id
+                    gt_instances_3d = gt_instances_3d[ego_mask]
+                
                 if self.filter_invalid:
                     gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid]
 
-                if len(gt_instances_3d) > 0:
-                    bev_corners = gt_instances_3d.bboxes_3d.corners[0, [0, 3, 7, 4], :2].numpy() # cpu tensor -> numpy corners N 8 3， clockwise
-                    # [N, 4, 2]
-                    bev_corners_voxel = np.round((bev_corners + self.offset_xy) / self.voxel_size[:2]).astype(np.int32)
+                bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
+                bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
 
-                    for idx, id in enumerate(gt_instances_3d.track_id):
-                        if id not in track_instance_map:
-                            track_instance_map[id] = len(track_instance_map) + 1
-                        color = track_instance_map[id]
+                for index, id in enumerate(gt_instances_3d.track_id):
+                    if id not in track_map:
+                        track_map[id] = len(track_map) + 1
+                    instance_id = track_map[id]
+                    poly_region = bbox_corners_voxel[index]
+                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
+                    cv2.fillPoly(instance, [poly_region], instance_id) # 实例分割为0~254
 
-                        poly_region = bev_corners_voxel[idx]
+                segmentations.append(segmentation)
+                instances.append(instance)
 
-                        cv2.fillPoly(segmentation, [poly_region], 1.0) # type: ignore seg
-                        cv2.fillPoly(instance, [poly_region], color) # instance seg
-                
-                segmentations.append(segmentation.astype(np.int64)) # type: ignore
-                instances.append(instance.astype(np.int64)) # type: ignore
-            segmentations = np.stack(segmentations, axis=0) # xx h w
-            instances = np.stack(instances, axis=0) # xx h w
+            segmentations = np.stack(segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
+            instances = np.stack(instances, axis=0).astype(np.int32) # [fu_len, H, W]
 
-            # FIXME
-            # FIXME
-            # FIXME
-            # FIXME
-            # FIXME
+            instance_centerness, instance_offset, instance_flow = convert_instance_mask_to_center_and_offset_label(
+                instances,
+                future_motion_rela_matrix[j],
+                len(track_map),
+                ignore_index = self.ignore_index,
+                spatial_extent = self.warp_size,
+            ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
 
-            future_motion = mat2vec(future_motion_matrix[j, ...])
+            # 如果分割有任何是没有box的则清除中心度为ignore
+            invalid_mask = (segmentations[:, 0, 0] == self.ignore_index)
+            instance_centerness[invalid_mask] = self.ignore_index
+            motion_label = {
+                'motion_segmentation': torch.from_numpy(segmentations), # [fu_len, H, W]
+                'motion_instance': torch.from_numpy(instances), # [fu_len, H, W]
+                'instance_centerness': torch.from_numpy(instance_centerness), # len, 1, h, w
+                'instance_offset': torch.from_numpy(instance_offset), # len, 2, h, w
+                'instance_flow': torch.from_numpy(instance_flow), # len, 2, h, w
+            }
+            example_seq[present_idx][j]['motion_label'] = motion_label
+            if self.visualizer:
+                save_path = os.path.join(self.just_save_root, f'{sample_idx}', f'{agent}')
+                os.makedirs(save_path, exist_ok=True)
 
-
-
-
-
-
-
-
-        return None
+                for ts, instance in enumerate(instances):
+                    self.visualizer.draw_instance_label(instance, ignore_index = self.ignore_index)
+                    self.visualizer.just_save(os.path.join(save_path, f"instance_{ts}.png"))
+                    self.visualizer.clean()
+        return input_dict
 
 
 def log(msg = "" ,level: int = logging.INFO):
@@ -607,7 +613,7 @@ class CorrelationFilter(BaseTransform):
         return potential, p_score
 
 
-    def transform(self, input_dict):
+    def transform(self, input_dict) -> Union[Dict,Tuple[List, List],None]:
         sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
         sample_interval = input_dict['sample_interval'] # 序列采集间隔
         present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
@@ -918,7 +924,8 @@ class PackSceneInfo(BaseTransform):
     def __init__(self,
                  meta_keys: tuple = (
                     'scene_name', 'seq_length', 'present_idx', 'co_agents', 'co_length', 'scene_length',
-                    'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'future_motion_matrix', 'loc_matrix'
+                    'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'future_motion_matrix',
+                    'loc_matrix', 'future_motion_rela_matrix'
                     ),
                 delete_ori_key: bool = True,
                 

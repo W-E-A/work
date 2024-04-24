@@ -2,10 +2,8 @@ from typing import Optional
 from mmdet3d.registry import MODELS
 from mmengine.model.base_module import BaseModule
 from mmdet3d.models.middle_encoders.pillar_scatter import PointPillarsScatter
-import math
+import numpy as np
 import torch
-import math
-torch.pi = math.pi
 import torch.nn as nn
 
 @MODELS.register_module()
@@ -19,9 +17,9 @@ class PointPillarsScatterWrapper(BaseModule):
         self.lidar_range = lidar_range
         self.voxel_size = voxel_size
 
-        D = math.ceil((lidar_range[5] - lidar_range[2]) / voxel_size[2])
-        H = math.ceil((lidar_range[4] - lidar_range[1]) / voxel_size[1])
-        W = math.ceil((lidar_range[3] - lidar_range[0]) / voxel_size[0])
+        D = np.round((lidar_range[5] - lidar_range[2]) / voxel_size[2]).astype(np.int32)
+        H = np.round((lidar_range[4] - lidar_range[1]) / voxel_size[1]).astype(np.int32)
+        W = np.round((lidar_range[3] - lidar_range[0]) / voxel_size[0]).astype(np.int32)
 
         self.scatter = PointPillarsScatter(in_channels, [H, W])
     
@@ -44,7 +42,7 @@ class GaussianConv(BaseModule):
         dtype = self.gaussian_filter.weight.dtype
         center = kernel_size // 2
         x, y = torch.meshgrid(torch.linspace(0 - center, kernel_size // 2, kernel_size), torch.linspace(0 - center, kernel_size // 2, kernel_size))
-        gaussian_kernel = 1 / (2 * torch.pi * sigma) * torch.exp(-(torch.square(x) + torch.square(y)) / (2 * sigma**2))
+        gaussian_kernel = 1 / (2 * np.pi * sigma) * torch.exp(-(torch.square(x) + torch.square(y)) / (2 * sigma**2))
         self.gaussian_filter.weight.data = gaussian_kernel.to(device=device, dtype=dtype).unsqueeze(0).unsqueeze(0)
         self.gaussian_filter.requires_grad = False # type: ignore
 

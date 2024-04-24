@@ -21,6 +21,7 @@ det_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 det_center_range = [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 motion_range = [-50, -50, -5.0, 50, 50, 3.0]
 voxel_size = [0.1, 0.1, 8.0]
+motion_voxel_size = [0.5, 0.5, 8.0]
 out_factor = 4
 det_out_factor = 4
 motion_out_factor = 4
@@ -139,7 +140,6 @@ test_pipline = [
 
 train_scene_pipline = [
     dict(type='GatherV2XPoseInfo'),
-    # dict(type=''),
     dict(
         type = 'CorrelationFilter',
         ego_name = train_ego_name,
@@ -152,21 +152,38 @@ train_scene_pipline = [
         alpha_coeff = 1,
         beta_coeff = 1,
         gamma_coeff = 2,
-        # visualizer_cfg = dict( # FIXME
+        # visualizer_cfg = dict(
         #     type='SimpleLocalVisualizer',
         #     pc_range=lidar_range,
         #     voxel_size=voxel_size,
         #     name='visualizer',
         # ),
-        # just_save_root = './data/gt_vis_data',
+        # just_save_root = './data/correlation',
         # increment_save = True,
-        verbose = False
+        verbose = False,
     ),
-    dict(type='GatherHistoryPoint', pad_delay = pad_delay),
+    dict(
+        type = 'MakeMotionLabels',
+        pc_range = motion_range,
+        voxel_size = motion_voxel_size,
+        ego_id = -100,
+        only_vehicle = False,
+        vehicle_id_list = [0, 1, 2],
+        filter_invalid = True,
+        ignore_index = 255,
+        # visualizer_cfg = dict(
+        #     type='SimpleLocalVisualizer',
+        #     pc_range=motion_range,
+        #     voxel_size=motion_voxel_size,
+        #     name='visualizer',
+        # ),
+        # just_save_root = './data/motion',
+    ),
+    dict(type='GatherHistoryPoint', pad_delay = pad_delay), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
-    dict(type='RemoveHistoryInputs'),
+    # dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
@@ -174,7 +191,6 @@ train_scene_pipline = [
 
 test_scene_pipline = [
     dict(type='GatherV2XPoseInfo'),
-    # dict(type=''),
     dict(
         type = 'CorrelationFilter',
         ego_name = test_ego_name,
@@ -187,21 +203,38 @@ test_scene_pipline = [
         alpha_coeff = 1,
         beta_coeff = 1,
         gamma_coeff = 2,
-        # visualizer_cfg = dict( # FIXME
+        # visualizer_cfg = dict(
         #     type='SimpleLocalVisualizer',
         #     pc_range=lidar_range,
         #     voxel_size=voxel_size,
         #     name='visualizer',
         # ),
-        # just_save_root = './data/gt_vis_data',
+        # just_save_root = './data/correlation',
         # increment_save = True,
-        verbose = False
+        verbose = False,
     ),
-    dict(type='GatherHistoryPoint', pad_delay = pad_delay),
+    dict(
+        type = 'MakeMotionLabels',
+        pc_range = motion_range,
+        voxel_size = motion_voxel_size,
+        ego_id = -100,
+        only_vehicle = False,
+        vehicle_id_list = [0, 1, 2],
+        filter_invalid = True,
+        ignore_index = 255,
+        # visualizer_cfg = dict(
+        #     type='SimpleLocalVisualizer',
+        #     pc_range=motion_range,
+        #     voxel_size=motion_voxel_size,
+        #     name='visualizer',
+        # ),
+        # just_save_root = './data/motion',
+    ),
+    dict(type='GatherHistoryPoint', pad_delay = pad_delay), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
-    dict(type='RemoveHistoryInputs'), # FIXME
+    # dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
@@ -214,11 +247,10 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=False),
+          shuffle=True),
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
-        ann_file = train_annfile_path, # FIXME
-        # ann_file = val_annfile_path, # FIXME
+        ann_file = train_annfile_path,
         pipeline = train_pipline,
         modality = dict(use_lidar=True, use_camera=False),
         box_type_3d = 'LiDAR',
@@ -413,26 +445,22 @@ model = dict(
         rela_gaussian_overlap=0.1,
         max_objs=500,
         min_radius=2,
-        code_weights=code_weights,
+        code_weights=code_weights, # code_size
         gather_task_loss=True,
-        train_mode=train_mode,
+        train_mode=train_mode, # FIXME
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
         post_center_limit_range=det_center_range,
         score_threshold=0.1,
-        nms_thr=[0.1, 0.1, 0.1, 0.1, 0.1, 0.3],
-        # nms_rescale_factor=[1.0, 0.7, 0.7, 1.0, 1.0, 4.5],
-        nms_rescale_factor=[1.0, 1.0, 1.0, 2.0, 2.0, 4.5],
+        nms_thr=[0.1, 0.1, 0.3, 0.3],
+        nms_rescale_factor=[1.0, [0.7, 0.7], [2.0, 2.0], 4.5],
         pre_max_size=1000,
         post_max_size=83,
         max_per_img=500,
         max_pool_nms=False,
-        min_radius=[4, 10, 12, 1, 0.85, 0.175],
-        out_size_factor=det_out_factor,
-        voxel_size=voxel_size[:2],
-        pc_range=lidar_range[:2],
-        test_mode=test_mode,
+        min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
+        test_mode=test_mode, # FIXME
     ),
     # pts_fusion_cfg=dict(
     #     train_ego_name=train_ego_name, # FIXME

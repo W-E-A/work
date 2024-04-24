@@ -7,6 +7,7 @@ from mmengine.dist import master_only
 import numpy as np
 import torch
 from torch import Tensor
+from .motion_visualization import plot_instance_map
 
 @VISUALIZERS.register_module()
 class SimpleLocalVisualizer(Visualizer):
@@ -31,9 +32,9 @@ class SimpleLocalVisualizer(Visualizer):
         self.voxel_size = voxel_size
         self.mask_range = mask_range
         self.grid_size = np.array([
-            np.ceil((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
-            np.ceil((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
-            np.ceil((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
+            np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
+            np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
+            np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
         ]).astype(np.int32) # 1024 1024 1
         self.offset_xy = np.array([
             self.pc_range[0] + self.voxel_size[0] * 0.5,
@@ -168,6 +169,24 @@ class SimpleLocalVisualizer(Visualizer):
     @master_only
     def draw_bev_feat(self, feat: Tensor, **kwargs):
         self.set_image(self.draw_featmap(feat, **kwargs))
+    
+    @master_only
+    def draw_featmap(self, feat: Tensor, **kwargs):
+        check_type('feat', feat, (np.ndarray, torch.Tensor))
+        feat = torch.tensor(feat)
+        self.set_image(super().draw_featmap(feat, **kwargs))
+    
+    @master_only
+    def draw_instance_label(self, instance, ignore_index = 255, **kwargs):
+        instance_ids = np.unique(instance)[1:]
+        instance_ids = instance_ids[instance_ids != ignore_index]
+        instance_map = dict(zip(instance_ids, instance_ids))
+        color_instance_i = plot_instance_map(instance, instance_map, **kwargs)
+        self.set_image(color_instance_i)
+    
+    # @master_only
+    # def draw_motion_preds(motion_preds):
+    #     self.set_image(plot_motion_prediction(motion_preds))
 
     # @master_only
     def just_save(self, save_path: str = "./bev_points.png"):

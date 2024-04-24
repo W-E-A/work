@@ -157,20 +157,23 @@ class CorrelationModel(MVXTwoStageDetector):
         present_seq = example_seq[present_idx]
 
         ################################ INPUT DEBUG (stop here)################################
-        # scene_info_0.pop('pose_matrix')
-        # scene_info_0.pop('future_motion_matrix')
-        # scene_info_0.pop('loc_matrix')
-        # log(scene_info_0)
+        scene_info_0.pop('pose_matrix')
+        scene_info_0.pop('future_motion_matrix')
+        scene_info_0.pop('loc_matrix')
+        scene_info_0.pop('future_motion_rela_matrix')
+        log(scene_info_0)
+
         # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
         # assert batch_size == 1
         # visualizer.set_points(present_seq[self.inf_id]['inputs']['points'][0].cpu().numpy())
         # visualizer.just_save('./data/temp.png')
-        # import pdb
-        # pdb.set_trace()
-        # if mode == 'loss': 
-        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-        # else:
-        #     return []
+
+        import pdb
+        pdb.set_trace()
+        if mode == 'loss': 
+            return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        else:
+            return []
         ################################ INPUT DEBUG (stop here)################################
 
         neck_features = []

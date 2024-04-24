@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List, Union, Optional, Sequence, Tuple, Dict
-from mmdet.models.utils import multi_apply
 from mmdet3d.registry import MODELS
-from mmengine.model import BaseModule
 from mmengine.structures import InstanceData
 import torch
 from torch import Tensor, nn
@@ -16,7 +14,7 @@ from mmdet3d.models.utils import (clip_sigmoid, draw_heatmap_gaussian,
 from mmdet3d.registry import MODELS, TASK_UTILS
 from mmdet3d.structures import Det3DDataSample, xywhr2xyxyr
 from mmdet3d.models.dense_heads.centerpoint_head import circle_nms, nms_bev
-import math
+import numpy as np
 
 @MODELS.register_module()
 class MTHead(BaseModule):
@@ -211,9 +209,9 @@ class CenterHeadModified(BaseModule):
             self.out_size_factor = self.train_cfg['out_size_factor']
 
             self.grid_size = torch.tensor([
-                math.ceil((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
-                math.ceil((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
-                math.ceil((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
+                np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
+                np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
+                np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
             ], dtype=torch.int32) # 1024 1024 1
             self.feature_map_size = [size // self.out_size_factor for size in self.grid_size[:2]] # H W
             self.gaussian_overlap = self.train_cfg['gaussian_overlap']
