@@ -70,7 +70,7 @@ def _process_target_items(target_items_subset, data_path, load_anno, sample_inte
 
         # parallel
         task_queue = queue.Queue()
-        num_threads = os.cpu_count()  # 设置线程数量
+        num_threads = num_threads  # 设置线程数量
 
         def process_frame(agent, frame, data_path, scenario_type, scenario, contents, load_anno, scene_data, meta_info, sample_interval, last_seq_idx):
             calib_path = osp.join(data_path,scenario_type,agent,'calib',scenario,frame+contents['calib'])
@@ -208,9 +208,8 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
         sample_dt = 0.1
 
     # parellel
-
-    num_processes = 20
-    num_threads = os.cpu_count()
+    num_processes = max(os.cpu_count() // 8, 1)
+    num_threads = os.cpu_count() // 2
     target_items_split = [target_items[i::num_processes] for i in range(num_processes)]
 
     with mp.Pool(processes=num_processes) as pool:

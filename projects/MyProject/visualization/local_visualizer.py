@@ -7,7 +7,7 @@ from mmengine.dist import master_only
 import numpy as np
 import torch
 from torch import Tensor
-from .motion_visualization import plot_instance_map
+from .motion_visualization import plot_instance_map, visualise_output
 
 @VISUALIZERS.register_module()
 class SimpleLocalVisualizer(Visualizer):
@@ -145,7 +145,6 @@ class SimpleLocalVisualizer(Visualizer):
         dy = positions_voxel[1][1] - positions_voxel[0][1]
         self.ax_save.arrow(positions_voxel[0][0], positions_voxel[0][1], dx, dy, **kwargs)
 
-    
     @master_only
     def draw_texts(
         self,
@@ -173,20 +172,25 @@ class SimpleLocalVisualizer(Visualizer):
     @master_only
     def draw_featmap(self, feat: Tensor, **kwargs):
         check_type('feat', feat, (np.ndarray, torch.Tensor))
-        feat = torch.tensor(feat)
+        if isinstance(feat, np.ndarray):
+            feat = torch.tensor(feat)
         self.set_image(super().draw_featmap(feat, **kwargs))
     
     @master_only
     def draw_instance_label(self, instance, ignore_index = 255, **kwargs):
-        instance_ids = np.unique(instance)[1:]
+        check_type('instance', instance, (np.ndarray, torch.Tensor))
+        instance = tensor2ndarray(instance)
+        
+        instance_ids = np.unique(instance)[1:].astype(np.int32)
         instance_ids = instance_ids[instance_ids != ignore_index]
         instance_map = dict(zip(instance_ids, instance_ids))
         color_instance_i = plot_instance_map(instance, instance_map, **kwargs)
         self.set_image(color_instance_i)
     
-    # @master_only
-    # def draw_motion_preds(motion_preds):
-    #     self.set_image(plot_motion_prediction(motion_preds))
+    @master_only
+    def draw_motion_label(motion_label):
+        video = visualise_output(labels=motion_label, output=None)
+        # self.set_image(plot_motion_prediction(motion_label))
 
     # @master_only
     def just_save(self, save_path: str = "./bev_points.png"):

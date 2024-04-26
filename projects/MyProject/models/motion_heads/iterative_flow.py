@@ -5,11 +5,9 @@ from mmdet3d.registry import MODELS
 from ..dense_heads.base_taskhead import BaseTaskHead
 from ..dense_heads.loss_utils import MotionSegmentationLoss, SpatialRegressionLoss, ProbabilisticLoss, GaussianFocalLoss, SpatialProbabilisticLoss
 from ...utils.instance import predict_instance_segmentation_and_trajectories
-from ...utils.warper import FeatureWarper
 
 from ..modules.motion_modules import ResFuturePrediction, ResFuturePredictionV2
 from ._base_motion_head import BaseMotionHead
-
 
 
 @MODELS.register_module()
@@ -51,9 +49,9 @@ class IterativeFlow(BaseMotionHead):
         2. iteratively get future states with ConvGRU
         3. decode present & future states with the decoder heads
         '''
-        import pdb;pdb.set_trace()
-        bevfeats = bevfeats[0]
-
+        # import pdb;pdb.set_trace()
+        bevfeats = bevfeats[0] # b, 384, 256, 256 输入应该是结合了历史bev信息也就是temporal模块的bev特征，或者是单帧的BEV特征
+        bevfeats = self.cropper(bevfeats) # b, 384, 200, 200
         # visualize_feature(bevfeats)
 
         if self.training or self.posterior_with_label:
@@ -66,7 +64,7 @@ class IterativeFlow(BaseMotionHead):
             res = list()
             if self.n_future > 0:
                 present_state = bevfeats.unsqueeze(dim=1).contiguous()
-
+                
                 # sampling probabilistic distribution
                 samples, output_distribution = self.distribution_forward(
                     present_state, future_distribution_inputs, noise
@@ -100,21 +98,21 @@ class IterativeFlow(BaseMotionHead):
         else:
             res = {}
             if self.n_future > 0:
-                present_state = bevfeats.unsqueeze(dim=1).contiguous()
-
+                present_state = bevfeats.unsqueeze(dim=1).contiguous() # b, 1, 384, 200, 200
+                # import pdb;pdb.set_trace()
                 # sampling probabilistic distribution
                 sample, output_distribution = self.distribution_forward(
-                    present_state, future_distribution_inputs, noise
+                    present_state, future_distribution_inputs, noise # B len 1+1+2+2 200, 200
                 )
 
                 b, _, _, h, w = present_state.shape
                 hidden_state = present_state[:, 0]
 
-                future_states = self.future_prediction(sample, hidden_state)
-                future_states = torch.cat([present_state, future_states], dim=1)
+                future_states = self.future_prediction(sample, hidden_state) #input B, 1, dim, 200, 200 and B, 384, 200, 200 output 1,5,384,200,200
+                future_states = torch.cat([present_state, future_states], dim=1) #(B,1,384,200,200) cat (B,5,384,200,200)
                 # flatten dimensions of (batch, sequence)
                 batch, seq = future_states.shape[:2]
-                flatten_states = future_states.flatten(0, 1)
+                flatten_states = future_states.flatten(0, 1) #(6,384,200,200)
 
                 if self.training:
                     res.update(output_distribution)
@@ -127,7 +125,7 @@ class IterativeFlow(BaseMotionHead):
                 for task_key, task_head in self.task_heads.items():
                     res[task_key] = task_head(bevfeats).view(b, 1, -1, h, w)
 
-
+        # import pdb;pdb.set_trace()
         return res
 
 

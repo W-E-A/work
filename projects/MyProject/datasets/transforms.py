@@ -417,6 +417,7 @@ class MakeMotionLabels(BaseTransform):
         self.vehicle_id_list = vehicle_id_list
         self.filter_invalid = filter_invalid
         self.ignore_index = ignore_index
+        self.visualizer = None
         if visualizer_cfg is not None:
             self.visualizer: SimpleLocalVisualizer = VISUALIZERS.build(visualizer_cfg)
             assert just_save_root != None
@@ -447,7 +448,7 @@ class MakeMotionLabels(BaseTransform):
             for i, timestamp in enumerate(future_seq_position):
                 gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
 
-                if gt_instances_3d.bboxes_3d == None:
+                if gt_instances_3d.bboxes_3d is None:
                     segmentation = np.ones(
                         (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
                     instance = np.ones_like(segmentation) * self.ignore_index
@@ -495,13 +496,14 @@ class MakeMotionLabels(BaseTransform):
             invalid_mask = (segmentations[:, 0, 0] == self.ignore_index)
             instance_centerness[invalid_mask] = self.ignore_index
             motion_label = {
-                'motion_segmentation': torch.from_numpy(segmentations), # [fu_len, H, W]
-                'motion_instance': torch.from_numpy(instances), # [fu_len, H, W]
-                'instance_centerness': torch.from_numpy(instance_centerness), # len, 1, h, w
-                'instance_offset': torch.from_numpy(instance_offset), # len, 2, h, w
-                'instance_flow': torch.from_numpy(instance_flow), # len, 2, h, w
+                'motion_segmentation': torch.from_numpy(segmentations).float(), # [fu_len, H, W]
+                'motion_instance': torch.from_numpy(instances).float(), # [fu_len, H, W]
+                'instance_centerness': torch.from_numpy(instance_centerness).float(), # len, 1, h, w
+                'instance_offset': torch.from_numpy(instance_offset).float(), # len, 2, h, w
+                'instance_flow': torch.from_numpy(instance_flow).float(), # len, 2, h, w invalid at last
+                'future_egomotion': torch.from_numpy(future_motion_rela_matrix[j]) # len, 4, 4 ident at 0
             }
-            example_seq[present_idx][j]['motion_label'] = motion_label
+            input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
             if self.visualizer:
                 save_path = os.path.join(self.just_save_root, f'{sample_idx}', f'{agent}')
                 os.makedirs(save_path, exist_ok=True)
@@ -806,42 +808,46 @@ class CorrelationFilter(BaseTransform):
 
 @TRANSFORMS.register_module()
 class GatherHistoryPoint(BaseTransform):
-    def __init__(self, pad_delay: bool = True) -> None:
+    def __init__(self, pad_delay: bool = True, impl: bool = False) -> None:
         self.pad_delay = pad_delay
+        self.impl = impl
+        if not impl:
+            assert not pad_delay, "pad_delay must be False when not impl"
     def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
-        sample_interval = input_dict['sample_interval'] # 序列采集间隔
-        present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
-        seq_length = input_dict['seq_length'] # 当前序列长度，比如6
-        co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
-        example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
-        history_seq_position = range(seq_length)[:present_idx+1] # 历史帧索引
-        history_length = len(history_seq_position) # 历史长度
-        delays = [-i * sample_interval * 0.1 for i in range(history_length)][::-1] # 历史时间差
-        future_loc_matrix = input_dict['loc_matrix'][:present_idx+1, ...] # c x 4 4 # 历史ego的实际位置 比如 3, 2, 4, 4
+        if self.impl:
+            sample_interval = input_dict['sample_interval'] # 序列采集间隔
+            present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
+            seq_length = input_dict['seq_length'] # 当前序列长度，比如6
+            co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
+            example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
+            history_seq_position = range(seq_length)[:present_idx+1] # 历史帧索引
+            history_length = len(history_seq_position) # 历史长度
+            delays = [-i * sample_interval * 0.1 for i in range(history_length)][::-1] # 历史时间差
+            future_loc_matrix = input_dict['loc_matrix'][:present_idx+1, ...] # c x 4 4 # 历史ego的实际位置 比如 3, 2, 4, 4
 
-        after_dim = 4
-        for j, agent in enumerate(co_agents):
-            all_points = []
-            for i, idx in enumerate(history_seq_position):
-                # import pdb
-                # pdb.set_trace()
-                points = example_seq[idx][j]['inputs']['points']
-                if self.pad_delay:
-                    points = torch.cat([
+            after_dim = 4
+            for j, agent in enumerate(co_agents):
+                all_points = []
+                for i, idx in enumerate(history_seq_position):
+                    # import pdb
+                    # pdb.set_trace()
+                    points = example_seq[idx][j]['inputs']['points']
+                    if self.pad_delay:
+                        points = torch.cat([
+                            points,
+                            torch.full_like(points[..., :1], delays[i])
+                        ], dim=-1)
+                    points = LiDARPoints(
                         points,
-                        torch.full_like(points[..., :1], delays[i])
-                    ], dim=-1)
-                points = LiDARPoints(
-                    points,
-                    points_dim=points.shape[-1],
-                )
-                if i < history_length - 1:
-                    trans = calc_relative_pose(future_loc_matrix[-1], future_loc_matrix[i])
-                    all_points.append(points.convert_to(Coord3DMode.LIDAR, trans))
-                else:
-                    all_points.append(points)
-            all_points = LiDARPoints.cat(all_points)
-            example_seq[present_idx][j]['inputs']['points'] = all_points.tensor
+                        points_dim=points.shape[-1],
+                    )
+                    if i < history_length - 1:
+                        trans = calc_relative_pose(future_loc_matrix[-1], future_loc_matrix[i])
+                        all_points.append(points.convert_to(Coord3DMode.LIDAR, trans))
+                    else:
+                        all_points.append(points)
+                all_points = LiDARPoints.cat(all_points)
+                example_seq[present_idx][j]['inputs']['points'] = all_points.tensor
         return input_dict
 
 

@@ -13,9 +13,12 @@ class DeepAccidentDataPreprocessor(Det3DDataPreprocessor):
         casted_scene_info = self.cast_data(data['scene_info']) # type: ignore
         seq_length = data['scene_info'][0].seq_length # type: ignore
         co_length = data['scene_info'][0].co_length # type: ignore
+        present_idx = data['scene_info'][0].present_idx # type: ignore
         casted_example_seq = [ [ {} for j in range(co_length)] for i in range(seq_length)]
         for i in range(seq_length): # type: ignore
             for j in range(co_length):
                 input_dict = data['example_seq'][i][j] # type: ignore
                 casted_example_seq[i][j] = self.simple_process(input_dict, training) # type: ignore
+                if i == present_idx:
+                    casted_example_seq[i][j]['motion_label'] = self.cast_data(input_dict['motion_label'])
         return {'scene_info': casted_scene_info, 'example_seq': casted_example_seq}

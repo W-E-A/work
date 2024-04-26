@@ -8,6 +8,8 @@ from mmengine.logging import print_log
 import logging
 from ...visualization import SimpleLocalVisualizer
 from mmdet3d.structures import Det3DDataSample
+import os
+from ...utils import FeatureWarper
 
 
 def log(msg = "" ,level: int = logging.INFO):
@@ -26,7 +28,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 #  test_comm_expand_layer: Optional[dict] = None,
                  pts_train_cfg: Optional[dict] = None,
                  pts_test_cfg: Optional[dict] = None,
-                #  pts_fusion_cfg: Optional[dict] = None,
+                 pts_fusion_cfg: Optional[dict] = None,
                  init_cfg: Optional[dict] = None,
                  data_preprocessor: Optional[dict] = None):
         super(CorrelationModel, self).__init__(
@@ -40,6 +42,7 @@ class CorrelationModel(MVXTwoStageDetector):
         
         self.pts_train_cfg = pts_train_cfg
         self.pts_test_cfg = pts_test_cfg
+        self.pts_fusion_cfg = pts_fusion_cfg
         
         if multi_task_head:
             multi_task_head.update(train_cfg = pts_train_cfg)
@@ -56,6 +59,9 @@ class CorrelationModel(MVXTwoStageDetector):
         #     self.score_threshold = self.pts_test_cfg.get('score_threshold', 0.1)
         #     assert self.test_mode in ('full', 'where2comm', 'new_method', 'single')
 
+        if self.pts_fusion_cfg:
+            self.pc_range = self.pts_fusion_cfg.get('pc_range', None)
+            self.warper = FeatureWarper(self.pc_range)
 
 
     def extract_pts_feat(
@@ -155,25 +161,57 @@ class CorrelationModel(MVXTwoStageDetector):
         self.ego_id = co_agents.index('ego_vehicle') # FIXME
         self.inf_id = co_agents.index('infrastructure') # FIXME
         present_seq = example_seq[present_idx]
+        del example_seq
+
+        motion_label = present_seq[self.inf_id]['motion_label'] # infrastructure FIXME
 
         ################################ INPUT DEBUG (stop here)################################
-        scene_info_0.pop('pose_matrix')
-        scene_info_0.pop('future_motion_matrix')
-        scene_info_0.pop('loc_matrix')
-        scene_info_0.pop('future_motion_rela_matrix')
-        log(scene_info_0)
+        # assert batch_size == 1
+        # scene_info_0.pop('pose_matrix')
+        # scene_info_0.pop('future_motion_matrix')
+        # scene_info_0.pop('loc_matrix')
+        # scene_info_0.pop('future_motion_rela_matrix')
+        # log(scene_info_0)
+        # sample_idx = scene_info_0.sample_idx
 
         # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
-        # assert batch_size == 1
+        
         # visualizer.set_points(present_seq[self.inf_id]['inputs']['points'][0].cpu().numpy())
-        # visualizer.just_save('./data/temp.png')
+        # os.makedirs(f'./data/motion/{sample_idx}', exist_ok=True)
+        # visualizer.just_save(f'./data/motion/{sample_idx}/lidar_bev.png')
+        # visualizer.clean()
 
-        import pdb
-        pdb.set_trace()
-        if mode == 'loss': 
-            return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-        else:
-            return []
+        # instances = motion_label['motion_instance'][0].cpu() # batch len h w
+
+        # for ts, instance in enumerate(instances):
+        #     visualizer.draw_instance_label(instance)
+        #     visualizer.just_save(f'./data/motion/{sample_idx}/instance_{ts}.png')
+        #     visualizer.clean()
+
+        # future_egomotion = torch.stack(motion_label['future_egomotion']) # 1, len, 4, 4
+        # instance_center_labels = torch.stack(motion_label['instance_centerness']) # 1 len h w
+        # instance_center_labels = self.warper.cumulative_warp_features_reverse(
+        #     instance_center_labels,
+        #     future_egomotion,
+        #     mode='nearest'
+        # ).contiguous() # 1 len h w
+
+        # for ts, center in enumerate(instance_center_labels[0]):
+        #     visualizer.draw_featmap(center)
+        #     visualizer.just_save(f'./data/motion/{sample_idx}/center_{ts}.png')
+        #     visualizer.clean()
+
+        # labels, _ = self.multi_task_head.motion_head.prepare_future_labels(motion_label)
+    
+        # visualizer.draw_motion_label(labels)
+
+
+        # import pdb
+        # pdb.set_trace()
+        # if mode == 'loss': 
+        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        # else:
+        #     return []
         ################################ INPUT DEBUG (stop here)################################
 
         neck_features = []
@@ -205,15 +243,16 @@ class CorrelationModel(MVXTwoStageDetector):
             meat_list.append(input_metas)
         
         if mode == 'loss':
-            single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id], ins_list[self.inf_id]) # out from dethead and motionhead
+            # infrastructure input B, C, H, W（b, 384, 256, 256 single frame）
+            single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id], motion_label) # out from dethead and motionhead
 
             heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(ins_list[self.inf_id]) # B
             single_det_gt = {
-                    'heatmaps':heatmaps,
-                    'anno_boxes':anno_boxes,
-                    'inds':inds,
-                    'masks':masks,
-                }
+                'heatmaps':heatmaps,
+                'anno_boxes':anno_boxes,
+                'inds':inds,
+                'masks':masks,
+            }
             single_det_loss_dict = self.multi_task_head.loss(single_head_feat_dict,
                                                 det_gt = single_det_gt,
                                                 motion_gt = None,

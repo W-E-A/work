@@ -5,6 +5,7 @@ from mmdet3d.models.middle_encoders.pillar_scatter import PointPillarsScatter
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 @MODELS.register_module()
 class PointPillarsScatterWrapper(BaseModule):
@@ -59,3 +60,59 @@ class GaussianConv(BaseModule):
         else:
             smooth_x = x
         return smooth_x
+
+class BevFeatureSlicer(nn.Module):
+    # crop the interested area in BEV feature for semantic map segmentation
+    def __init__(self, grid_conf, new_grid_conf):
+        super().__init__()
+
+        if grid_conf == new_grid_conf:
+            self.identity_mapping = True
+        else:
+            self.identity_mapping = False
+            pc_range = grid_conf[0]
+            voxel_size = grid_conf[1]
+            new_pc_range = new_grid_conf[0]
+            new_voxel_size = new_grid_conf[1]
+
+            bev_start_position = torch.tensor([
+                pc_range[0] + voxel_size[0]/2, # W X
+                pc_range[1] + voxel_size[1]/2, # H Y
+                pc_range[2] + voxel_size[2]/2, # D Z
+            ])
+            bev_dimension = torch.tensor([
+                (pc_range[3] - pc_range[0]) / voxel_size[0], # W X
+                (pc_range[4] - pc_range[1]) / voxel_size[1], # H Y
+                (pc_range[5] - pc_range[2]) / voxel_size[2], # D Z
+            ], dtype=torch.long)
+
+            new_resolution = torch.tensor(
+                [new_voxel_size[0],new_voxel_size[1],new_voxel_size[2]])
+            new_start_position = torch.tensor([
+                new_pc_range[0] + new_voxel_size[0]/2, # W X
+                new_pc_range[1] + new_voxel_size[1]/2, # H Y
+                new_pc_range[2] + new_voxel_size[2]/2, # D Z
+            ])
+
+            self.map_x = torch.arange(
+                new_start_position[0], new_pc_range[3], new_resolution[0])
+
+            self.map_y = torch.arange(
+                new_start_position[1], new_pc_range[4], new_resolution[1])
+
+            # convert to normalized coords
+            self.norm_map_x = self.map_x / (- bev_start_position[0])
+            self.norm_map_y = self.map_y / (- bev_start_position[1])
+
+            norm_map_xx,norm_map_yy = torch.meshgrid(self.norm_map_x, self.norm_map_y)
+            self.map_grid = torch.stack((norm_map_xx.transpose(1,0), norm_map_yy.transpose(1,0)), dim=2)
+
+    def forward(self, x):
+        # x: bev feature map tensor of shape (b, c, h, w)
+        if self.identity_mapping:
+            return x
+        else:
+            grid = self.map_grid.unsqueeze(0).type_as(
+                x).repeat(x.shape[0], 1, 1, 1)
+
+            return F.grid_sample(x, grid=grid, mode='bilinear', align_corners=True)

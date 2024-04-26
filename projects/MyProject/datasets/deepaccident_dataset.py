@@ -3,7 +3,7 @@ from mmdet3d.registry import DATASETS
 from mmdet3d.datasets.det3d_dataset import Det3DDataset
 from mmengine.dataset import Compose
 import mmengine
-from mmengine.logging import print_log
+from mmengine import print_log
 from logging import WARNING, INFO
 import numpy as np
 from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes
@@ -12,13 +12,15 @@ import copy
 @DATASETS.register_module()
 class DeepAccident_V2X_Dataset(Det3DDataset):
     """
-    dict_keys(['seq', 'example_seq', 'scene_name', 'seq_length', 'present_idx',
-    'co_agents', 'scene_length', 'scene_timestamps', 'sample_idx',
-    'seq_timestamps', 'co_length',
-    ])
-
-    对于数据生成标明有场景来源，代理列表，序列长度，序列时间戳的数据
-    
+    每次调用生成某个场景下的一段历史+当前+未来下，每个参与协同的代理的的元数据、输入数据。
+    经过默认配置的pipline之后（.表示有数据，x表示无数据）：
+    ----> 时间戳顺序            
+                [meta]
+                present
+    input [.] [.]   [.]   [x] [x] [x] ...
+    label [x] [x]   [.]   [x] [x] [x] ...
+                     |
+       current label + motion label
     """
     METAINFO = {
         'classes': ('car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian'),
@@ -75,12 +77,12 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
             **kwargs)
 
         # debug
-        for index in range(len(self)):
-            print(f"sample : {index}")
-            dt = self.prepare_data(index)
-            assert len(dt['example_seq'][2][1]['inputs']) > 0
-        import pdb
-        pdb.set_trace()
+        # for index in range(len(self)):
+        #     print(f"sample : {index}")
+        #     dt = self.prepare_data(index)
+        #     assert len(dt['example_seq'][2][1]['inputs']) > 0
+        # import pdb
+        # pdb.set_trace()
 
     def get_ann_info(self, index: int) -> dict:
         data_info = self.get_data_info(index)
@@ -225,7 +227,7 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
             data['scene_length'] = len(data['scene_timestamps'])
             if self.adeptive_seq_length and data['scene_length'] - self.seq_length + 1 <= 0:
                 # data['seq_length'] = data['scene_length']
-                print_log(f"Scenario '{scene_name}' has a length of '{data['scene_length']}', but requires {self.seq_length}, skip it!!!", level=WARNING)
+                print_log(f"Scenario '{scene_name}' has a length of '{data['scene_length']}', but requires {self.seq_length}, skip it!!!", 'current', level=WARNING)
                 continue
             else:
                 assert data['scene_length'] - self.seq_length + 1 > 0, f"The obtained sequence length is too long, maximum length {data['scene_length']}, required length {self.seq_length}"
@@ -243,7 +245,7 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
         return data_list
     
     def prepare_data(self, index: int) -> Union[dict, None]:
-        import pdb;pdb.set_trace()
+        # import pdb;pdb.set_trace()
         data_info = self.get_data_info(index)
         co_agents = data_info['co_agents']
         seq_timestamps = data_info['seq_timestamps']

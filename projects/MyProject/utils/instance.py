@@ -295,93 +295,67 @@ def convert_instance_mask_to_center_and_offset_label(
 #     return consistent_instance_seg
 
 
-# def predict_instance_segmentation_and_trajectories(output, compute_matched_centers=False, make_consistent=True, vehicles_id=1,):
-#     preds = output['segmentation'].detach()
+def predict_instance_segmentation_and_trajectories(
+    output, compute_matched_centers=False, make_consistent=True, vehicles_id=1,
+):
+    preds = output['segmentation'].detach()
+    preds = torch.argmax(preds, dim=2, keepdims=True)
+    foreground_masks = preds.squeeze(2) == vehicles_id
 
-#     # if preds.max() == 10 and preds.min() == 0:
-#     #     foreground_masks = preds[:, :, 1, :, :] > 0.3
-#     # else:
-#     #     foreground_masks = preds[:, :, 1, :, :].sigmoid() > 0.7
+    batch_size, seq_len = preds.shape[:2]
+    pred_inst = []
+    for b in range(batch_size):
+        pred_inst_batch = []
+        for t in range(seq_len):
+            pred_instance_t, _ = get_instance_segmentation_and_centers(
+                output['instance_center'][b, t].detach(),
+                output['instance_offset'][b, t].detach(),
+                foreground_masks[b, t].detach()
+            )
+            pred_inst_batch.append(pred_instance_t)
+        pred_inst.append(torch.stack(pred_inst_batch, dim=0))
 
+    pred_inst = torch.stack(pred_inst).squeeze(2)
 
-#     preds = torch.argmax(preds, dim=2, keepdims=True)
-#     foreground_masks = preds.squeeze(2) == vehicles_id
+    if make_consistent:
+        if 'instance_flow' not in output or output['instance_flow'] is None:
+            # print('Using zero flow because instance_future_output is None')
+            output['instance_flow'] = torch.zeros_like(
+                output['instance_offset'])
+        consistent_instance_seg = []
+        for b in range(batch_size):
+            consistent_instance_seg.append(
+                make_instance_id_temporally_consistent(pred_inst[b:b+1],
+                                                       output['instance_flow'][b:b+1].detach())
+            )
+        consistent_instance_seg = torch.cat(consistent_instance_seg, dim=0)
+    else:
+        consistent_instance_seg = pred_inst
 
-#     batch_size, seq_len = preds.shape[:2]
-#     pred_inst = []
-#     for b in range(batch_size):
-#         pred_inst_batch = []
-#         for t in range(seq_len):
-#             pred_instance_t, centers = get_instance_segmentation_and_centers(
-#                 output['instance_center'][b, t].detach(),
-#                 output['instance_offset'][b, t].detach(),
-#                 foreground_masks[b, t].detach(),
-#                 conf_threshold=0.1
-#                 # conf_threshold=0.05
-#             )
+    if compute_matched_centers:
+        assert batch_size == 1
+        # Generate trajectories
+        matched_centers = {}
+        _, seq_len, h, w = consistent_instance_seg.shape
+        grid = torch.stack(torch.meshgrid(
+            torch.arange(h, dtype=torch.float, device=preds.device),
+            torch.arange(w, dtype=torch.float, device=preds.device),
+            indexing='ij',
+        ))
 
-#             pred_inst_batch.append(pred_instance_t)
-#         pred_inst.append(torch.stack(pred_inst_batch, dim=0))
+        for instance_id in torch.unique(consistent_instance_seg[0, 0])[1:].cpu().numpy():
+            for t in range(seq_len):
+                instance_mask = consistent_instance_seg[0, t] == instance_id
+                if instance_mask.sum() > 0:
+                    matched_centers[instance_id] = matched_centers.get(instance_id, []) + [
+                        grid[:, instance_mask].mean(dim=-1)]
 
-#     pred_inst = torch.stack(pred_inst).squeeze(2)
+        for key, value in matched_centers.items():
+            matched_centers[key] = torch.stack(value).cpu().numpy()[:, ::-1]
 
+        return consistent_instance_seg, matched_centers
 
-#     if make_consistent:
-#         if 'instance_flow' not in output or output['instance_flow'] is None:
-#             # print('Using zero flow because instance_future_output is None')
-#             output['instance_flow'] = torch.zeros_like(
-#                 output['instance_offset'])
-#         consistent_instance_seg = []
-#         for b in range(batch_size):
-#             consistent_instance_seg.append(
-#                 make_instance_id_temporally_consistent(pred_inst[b:b + 1],
-#                                                        output['instance_flow'][b:b + 1].detach(),
-#                                                        matching_threshold=10.0)
-#             )
-#         consistent_instance_seg = torch.cat(consistent_instance_seg, dim=0)
-#     else:
-#         consistent_instance_seg = pred_inst
-
-#     if compute_matched_centers:
-#         assert batch_size == 1
-#         # Generate trajectories
-#         matched_centers = {}
-#         _, seq_len, h, w = consistent_instance_seg.shape
-#         grid = torch.stack(torch.meshgrid(
-#             torch.arange(h, dtype=torch.float, device=preds.device),
-#             torch.arange(w, dtype=torch.float, device=preds.device),
-#             indexing='ij',
-#         ))
-
-#         segmentpixelscnt = dict()
-#         for instance_id in torch.unique(consistent_instance_seg[0, 0])[1:].cpu().numpy():
-#             # for instance_id in torch.unique(consistent_instance_seg[0])[1:].cpu().numpy():
-#             for t in range(seq_len):
-#                 instance_mask = consistent_instance_seg[0, t] == instance_id
-#                 # if instance_id in segmentpixelscnt:
-#                 #     segmentpixelscnt[instance_id] += [instance_mask.sum().detach().cpu().item()]
-#                 # else:
-#                 #     segmentpixelscnt[instance_id] = [0]*t + [instance_mask.sum().detach().cpu().item()]
-#                 segmentpixelscnt[instance_id] = segmentpixelscnt.get(instance_id, []) + [
-#                     instance_mask.sum().detach().cpu().item()]
-
-#                 if instance_mask.sum() > 0:
-#                     # if instance_id in matched_centers:
-#                     #     matched_centers[instance_id] += [grid[:, instance_mask].mean(dim=-1)]
-#                     # else:
-#                     #     matched_centers[instance_id] = [torch.FloatTensor([-1,-1])]*t + [grid[:, instance_mask].mean(dim=-1)]
-#                     matched_centers[instance_id] = matched_centers.get(instance_id, []) + [
-#                         grid[:, instance_mask].mean(dim=-1)]
-#                 # else:
-#                 #     matched_centers[instance_id] = matched_centers.get(instance_id, []) + [
-#                 #         torch.tensor([-1.0, -1.0], device=grid.device)]
-
-#         for key, value in matched_centers.items():
-#             matched_centers[key] = torch.stack(value).cpu().numpy()[:, ::-1].tolist()
-#         return consistent_instance_seg, matched_centers, segmentpixelscnt
-#         # return consistent_instance_seg2, matched_centers, segmentpixelscnt
-
-#     return consistent_instance_seg
+    return consistent_instance_seg
 
 
 # def predict_instance_segmentation_and_trajectories_accident(

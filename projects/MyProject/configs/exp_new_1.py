@@ -17,16 +17,15 @@ agents = [
 
 lidar_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 mask_range = [-3.0, -1.5, -5.0, 3.0, 1.5, 3.0]
-det_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 det_center_range = [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 motion_range = [-50, -50, -5.0, 50, 50, 3.0]
 voxel_size = [0.1, 0.1, 8.0]
+lidar_voxel_size = [0.4, 0.4, 8.0]
 motion_voxel_size = [0.5, 0.5, 8.0]
-out_factor = 4
 det_out_factor = 4
 motion_out_factor = 4
 
-pad_delay = True
+pad_delay = False
 det_with_velocity = True
 code_size = 10
 # code_size = 7
@@ -49,7 +48,7 @@ det_common_heads = dict(
 
 # train params
 train_batch_size = 1
-train_num_workers = 8
+train_num_workers = 4
 train_seq_length = 8
 train_present_idx = 2
 train_key_interval = 1
@@ -103,8 +102,9 @@ train_pipline = [
     dict(type='PointShuffle'),
     dict(
         type='Pack3DDetInputsV2X',
-        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id','future_egomotions',
-        'motion_segmentation', 'motion_instance', 'instance_centerness', 'instance_offset', 'instance_flow']
+        keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id']
+        # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'bbox_3d_isvalid', 'track_id','future_egomotions',
+        # 'motion_segmentation', 'motion_instance', 'instance_centerness', 'instance_offset', 'instance_flow']
         # keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', 'track_id'] # validfilter impl
     ),
 ]
@@ -179,11 +179,11 @@ train_scene_pipline = [
         # ),
         # just_save_root = './data/motion',
     ),
-    dict(type='GatherHistoryPoint', pad_delay = pad_delay), # FIXME
+    dict(type='GatherHistoryPoint', pad_delay = pad_delay, impl = False), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
-    # dict(type='RemoveHistoryInputs'),
+    dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
@@ -230,7 +230,7 @@ test_scene_pipline = [
         # ),
         # just_save_root = './data/motion',
     ),
-    dict(type='GatherHistoryPoint', pad_delay = pad_delay), # FIXME
+    dict(type='GatherHistoryPoint', pad_delay = pad_delay, impl = False), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
@@ -421,6 +421,8 @@ model = dict(
             prob_latent_dim=32,
             receptive_field=3,
             n_future=5,
+            grid_conf = [lidar_range, lidar_voxel_size],
+            new_grid_conf = [motion_range, motion_voxel_size],
             using_spatial_prob=True,
             using_focal_loss=True,
             n_gru_blocks=1,
@@ -462,11 +464,11 @@ model = dict(
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
         test_mode=test_mode, # FIXME
     ),
-    # pts_fusion_cfg=dict(
-    #     train_ego_name=train_ego_name, # FIXME
-    #     test_ego_name=test_ego_name,
-    #     pc_range=lidar_range,
-    # )
+    pts_fusion_cfg=dict(
+        train_ego_name=train_ego_name, # FIXME
+        test_ego_name=test_ego_name,
+        pc_range=lidar_range,
+    )
 )
 
 lr = 1 * 1e-4
@@ -554,7 +556,7 @@ train_cfg = dict(
 # val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
-vis_backends = [dict(type='LocalVisBackend'), ]
+vis_backends = [dict(type='LocalVisBackend'), dict(type='TensorboardVisBackend')]
 visualizer = dict(
     type='SimpleLocalVisualizer',
     vis_backends=vis_backends,

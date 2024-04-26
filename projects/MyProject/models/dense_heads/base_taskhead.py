@@ -2,17 +2,20 @@ import torch
 import torch.nn as nn
 from mmengine.model import BaseModule
 from mmdet3d.registry import MODELS
-
-import pdb
+from typing import Dict, Optional
 
 
 @MODELS.register_module()
 class BaseTaskHead(BaseModule):
-    def __init__(self, task_dict, in_channels, inter_channels=None,
-                 init_cfg=dict(type='Kaiming', layer='Conv2d'),
-                 norm_cfg=dict(type='BN'),
-                 ):
-        super(BaseTaskHead, self).__init__(init_cfg=init_cfg)
+    def __init__(self,
+        task_dict: Dict,
+        in_channels: int,
+        inter_channels: Optional[int] = None,
+        init_cfg = None,
+    ):
+        super(BaseTaskHead, self).__init__(
+            init_cfg=init_cfg
+        )
 
         self.task_heads = nn.ModuleDict()
         inter_channels = in_channels if inter_channels is None else inter_channels

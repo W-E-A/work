@@ -9,6 +9,7 @@ from ..dense_heads.base_taskhead import BaseTaskHead
 from ..dense_heads.loss_utils import MotionSegmentationLoss, SpatialRegressionLoss, ProbabilisticLoss, GaussianFocalLoss, SpatialProbabilisticLoss
 from ...utils.instance import predict_instance_segmentation_and_trajectories
 from ...utils.warper import FeatureWarper
+from ..utils import BevFeatureSlicer
 
 # from ...visualize import Visualizer
 from ..modules.motion_modules import ResFuturePrediction, SpatialDistributionModule, DistributionModule
@@ -30,7 +31,8 @@ class BaseMotionHead(BaseTaskHead):
         in_channels=256,
         inter_channels=None,
         n_gru_blocks=3,
-        grid_conf=None,
+        grid_conf = None,
+        new_grid_conf = None,
         probabilistic_enable=True,
         prob_on_foreground=False,
         future_dim=6,
@@ -39,7 +41,6 @@ class BaseMotionHead(BaseTaskHead):
         using_spatial_prob=False,
         using_prob_each_future=False,
         detach_state=True,
-        norm_cfg=dict(type='BN'),
         # settings: loss
         class_weights=None,
         use_topk=True,
@@ -57,7 +58,7 @@ class BaseMotionHead(BaseTaskHead):
         **kwargs,
     ):
         super(BaseMotionHead, self).__init__(
-            task_dict, in_channels, inter_channels, init_cfg, norm_cfg)
+            task_dict, in_channels, inter_channels, init_cfg)
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -82,8 +83,8 @@ class BaseMotionHead(BaseTaskHead):
         self.using_focal_loss = using_focal_loss
 
         # self.visualizer = Visualizer(out_dir='train_visualize')
-        self.warper = FeatureWarper(grid_conf=grid_conf)
-
+        self.warper = FeatureWarper(pc_range=new_grid_conf[0])
+        self.cropper =  BevFeatureSlicer(grid_conf, new_grid_conf)
         if self.n_future > 0:
             distri_min_log_sigma, distri_max_log_sigma = distribution_log_sigmas
             # 当前的 feature + 未来的 label
@@ -247,20 +248,20 @@ class BaseMotionHead(BaseTaskHead):
         """
         b, s, _, h, w = present_features.size()
         assert s == 1
-
+        # import pdb;pdb.set_trace()
         present_mu, present_log_sigma = self.present_distribution(
-            present_features)
+            present_features) # b 1 384 200 200
 
         future_mu, future_log_sigma = None, None
         if future_distribution_inputs is not None:
             # Concatenate future labels to z_t
             future_features = future_distribution_inputs[:, 1:].contiguous().view(
-                b, 1, -1, h, w)
+                b, 1, -1, h, w) #(1,5,6,200,200)->(1,1,30,200,200) # B len 1+1+2+2 200, 200 -> B len-1 6 200 200 -> B 1 (len-1)*6 200 200
             future_features = torch.cat(
-                [present_features, future_features], dim=2)
+                [present_features, future_features], dim=2) # B 1 384+(len-1)*6 200 200
 
             future_mu, future_log_sigma = self.future_distribution(
-                future_features)
+                future_features)#future_mu (1,32,50,50) future_log_sigma (1,32,50,50)
 
         # import pdb
 
@@ -273,8 +274,8 @@ class BaseMotionHead(BaseTaskHead):
 
         # 在测试模式下使用 label 生成 sample时，未来预测的结果很差
         if self.training or self.posterior_with_label:
-            mu = future_mu
-            sigma = torch.exp(future_log_sigma)
+            mu = future_mu # B 1 dim
+            sigma = torch.exp(future_log_sigma) # B 1 dim
         else:
             mu = present_mu
             sigma = torch.exp(present_log_sigma)
@@ -326,35 +327,33 @@ class BaseMotionHead(BaseTaskHead):
                 else:
                     samples[i] = sample.view(b, -1, 1, 1).expand(b, -1, h, w)  # (1, 32, 1, 1) -> (1, 32, 200, 200)
         else:
-            samples = mu + sigma * noise
+            samples = mu + sigma * noise # 训练的时候从未来采样，同时训练对齐当前生成器生成和未来生成器的生成结果分布靠近（KL损失）
             # upsampling sample to the spatial size of features
             if self.using_spatial_prob:
                 samples = F.interpolate(
-                    samples, size=present_features.shape[-2:], mode='bilinear')
+                    samples, size=present_features.shape[-2:], mode='bilinear') # B 1 dim 200 200
             else:
                 samples = samples.view(b, -1, 1, 1).expand(b, -1, h, w)
 
         output_distribution = {
-            'present_mu': present_mu,
-            'present_log_sigma': present_log_sigma,
-            'future_mu': future_mu,
-            'future_log_sigma': future_log_sigma,
+            'present_mu': present_mu, # 当前采样 # B 1 dim
+            'present_log_sigma': present_log_sigma, # 当前采样 # B 1 dim
+            'future_mu': future_mu, # 测试时没有 # B 1 dim
+            'future_log_sigma': future_log_sigma, # 测试时没有 # B 1 dim
         }
 
-        return samples, output_distribution
+        return samples, output_distribution # B 1 dim 200 200
 
     def prepare_future_labels(self, batch, center_sampling_mode='nearest'):
         labels = {}
         future_distribution_inputs = []
-
-        segmentation_labels = batch['motion_segmentation']
-        instance_center_labels = batch['instance_centerness']
-        instance_offset_labels = batch['instance_offset']
-        instance_flow_labels = batch['instance_flow']
-        gt_instance = batch['motion_instance']
-        future_egomotion = batch['future_egomotion']
+        segmentation_labels = torch.stack(batch['motion_segmentation']) # B, len, H, W
+        instance_center_labels = torch.stack(batch['instance_centerness']) # B, len, 1, H, W
+        instance_offset_labels = torch.stack(batch['instance_offset']) # B, len, 2, H, W
+        instance_flow_labels = torch.stack(batch['instance_flow']) # B, len, 2, H, W
+        gt_instance = torch.stack(batch['motion_instance']) # B, len, H, W
+        future_egomotion = torch.stack(batch['future_egomotion']) # B, len, 4, 4
         bev_transform = batch.get('aug_transform', None)
-        labels['img_is_valid'] = batch.get('img_is_valid', None)
 
         if bev_transform is not None:
             bev_transform = bev_transform.float()
@@ -363,8 +362,8 @@ class BaseMotionHead(BaseTaskHead):
         # label_mode = 'bilinear'
 
         segmentation_labels = self.warper.cumulative_warp_features_reverse(
-            segmentation_labels.float().unsqueeze(2),
-            future_egomotion[:, (self.receptive_field - 1):],
+            segmentation_labels.float().unsqueeze(2), # B, len, 1, H, W
+            future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
         ).long().contiguous()
         labels['segmentation'] = segmentation_labels
@@ -373,21 +372,21 @@ class BaseMotionHead(BaseTaskHead):
         # Warp instance labels to present's reference frame
         gt_instance = self.warper.cumulative_warp_features_reverse(
             gt_instance.float().unsqueeze(2),
-            future_egomotion[:, (self.receptive_field - 1):],
+            future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
         ).long().contiguous()[:, :, 0]
         labels['instance'] = gt_instance
 
         instance_center_labels = self.warper.cumulative_warp_features_reverse(
             instance_center_labels,
-            future_egomotion[:, (self.receptive_field - 1):],
+            future_egomotion,
             mode=center_sampling_mode, bev_transform=bev_transform,
         ).contiguous()
         labels['centerness'] = instance_center_labels
 
         instance_offset_labels = self.warper.cumulative_warp_features_reverse(
             instance_offset_labels,
-            future_egomotion[:, (self.receptive_field - 1):],
+            future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
         ).contiguous()
         labels['offset'] = instance_offset_labels
@@ -397,7 +396,7 @@ class BaseMotionHead(BaseTaskHead):
 
         instance_flow_labels = self.warper.cumulative_warp_features_reverse(
             instance_flow_labels,
-            future_egomotion[:, (self.receptive_field - 1):],
+            future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
         ).contiguous()
         labels['flow'] = instance_flow_labels
@@ -410,7 +409,7 @@ class BaseMotionHead(BaseTaskHead):
         # self.visualizer.visualize_motion(labels=labels)
         # pdb.set_trace()
 
-        return labels, future_distribution_inputs
+        return labels, future_distribution_inputs # dict tensor B len 1+1+2+2 200, 200
 
     def loss(self, predictions, targets=None):
         loss_dict = {}
@@ -422,11 +421,12 @@ class BaseMotionHead(BaseTaskHead):
             'instance_offset': 2,
             'instance_flow': 2,
         '''
-
+        
         for key, val in self.training_labels.items():
             self.training_labels[key] = val.float()
-
-        frame_valid_mask = self.training_labels['img_is_valid'].bool()
+        # import pdb;pdb.set_trace()
+        frame_valid_mask = torch.tensor([True] * (self.receptive_field + self.n_future)).unsqueeze(0)
+        frame_valid_mask = frame_valid_mask.repeat(self.training_labels['segmentation'].shape[0], 1).bool()
         past_valid_mask = frame_valid_mask[:, :self.receptive_field]
         future_frame_mask = frame_valid_mask[:, (self.receptive_field - 1):]
 

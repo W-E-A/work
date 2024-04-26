@@ -1,11 +1,11 @@
 import numpy as np
 import torch
-# import matplotlib.pylab
-# import matplotlib.pyplot as plt
+import matplotlib.pylab
+import matplotlib.pyplot as plt
 # import pdb
-# import cv2
+import cv2
 
-# from ..utils import predict_instance_segmentation_and_trajectories
+from ..utils import predict_instance_segmentation_and_trajectories
 
 # DEFAULT_COLORMAP = matplotlib.pylab.cm.jet
 INSTANCE_COLOURS = np.asarray([
@@ -82,25 +82,25 @@ INSTANCE_COLOURS = np.asarray([
 ])
 
 
-# def flow_to_image(flow: np.ndarray, autoscale: bool = False):
-#     """
-#     Applies colour map to flow which should be a 2 channel image tensor HxWx2. Returns a HxWx3 numpy image
-#     Code adapted from: https://github.com/liruoteng/FlowNet/blob/master/models/flownet/scripts/flowlib.py
-#     """
-#     u = flow[0, :, :]
-#     v = flow[1, :, :]
+def flow_to_image(flow: np.ndarray, autoscale: bool = False):
+    """
+    Applies colour map to flow which should be a 2 channel image tensor HxWx2. Returns a HxWx3 numpy image
+    Code adapted from: https://github.com/liruoteng/FlowNet/blob/master/models/flownet/scripts/flowlib.py
+    """
+    u = flow[0, :, :]
+    v = flow[1, :, :]
 
-#     # Convert to polar coordinates
-#     rad = np.sqrt(u ** 2 + v ** 2)
-#     maxrad = np.max(rad)
+    # Convert to polar coordinates
+    rad = np.sqrt(u ** 2 + v ** 2)
+    maxrad = np.max(rad)
 
-#     # Normalise flow maps
-#     if autoscale:
-#         u /= maxrad + np.finfo(float).eps
-#         v /= maxrad + np.finfo(float).eps
+    # Normalise flow maps
+    if autoscale:
+        u /= maxrad + np.finfo(float).eps
+        v /= maxrad + np.finfo(float).eps
 
-#     # visualise flow with cmap
-#     return np.uint8(compute_color(u, v) * 255)
+    # visualise flow with cmap
+    return np.uint8(compute_color(u, v) * 255)
 
 
 # def _normalise(image: np.ndarray):
@@ -153,117 +153,117 @@ INSTANCE_COLOURS = np.asarray([
 #     return heatmap_np
 
 
-# def compute_color(u: np.ndarray, v: np.ndarray):
-#     assert u.shape == v.shape
-#     [h, w] = u.shape
-#     img = np.zeros([h, w, 3])
-#     nan_mask = np.isnan(u) | np.isnan(v)
-#     u[nan_mask] = 0
-#     v[nan_mask] = 0
+def compute_color(u: np.ndarray, v: np.ndarray):
+    assert u.shape == v.shape
+    [h, w] = u.shape
+    img = np.zeros([h, w, 3])
+    nan_mask = np.isnan(u) | np.isnan(v)
+    u[nan_mask] = 0
+    v[nan_mask] = 0
 
-#     colorwheel = make_color_wheel()
-#     ncols = np.size(colorwheel, 0)
+    colorwheel = make_color_wheel()
+    ncols = np.size(colorwheel, 0)
 
-#     rad = np.sqrt(u ** 2 + v ** 2)
-#     a = np.arctan2(-v, -u) / np.pi
-#     f_k = (a + 1) / 2 * (ncols - 1) + 1
-#     k_0 = np.floor(f_k).astype(int)
-#     k_1 = k_0 + 1
-#     k_1[k_1 == ncols + 1] = 1
-#     f = f_k - k_0
+    rad = np.sqrt(u ** 2 + v ** 2)
+    a = np.arctan2(-v, -u) / np.pi
+    f_k = (a + 1) / 2 * (ncols - 1) + 1
+    k_0 = np.floor(f_k).astype(int)
+    k_1 = k_0 + 1
+    k_1[k_1 == ncols + 1] = 1
+    f = f_k - k_0
 
-#     for i in range(0, np.size(colorwheel, 1)):
-#         tmp = colorwheel[:, i]
-#         col0 = tmp[k_0 - 1] / 255
-#         col1 = tmp[k_1 - 1] / 255
-#         col = (1 - f) * col0 + f * col1
+    for i in range(0, np.size(colorwheel, 1)):
+        tmp = colorwheel[:, i]
+        col0 = tmp[k_0 - 1] / 255
+        col1 = tmp[k_1 - 1] / 255
+        col = (1 - f) * col0 + f * col1
 
-#         idx = rad <= 1
-#         col[idx] = 1 - rad[idx] * (1 - col[idx])
-#         notidx = np.logical_not(idx)
+        idx = rad <= 1
+        col[idx] = 1 - rad[idx] * (1 - col[idx])
+        notidx = np.logical_not(idx)
 
-#         col[notidx] *= 0.75
-#         img[:, :, i] = col * (1 - nan_mask)
+        col[notidx] *= 0.75
+        img[:, :, i] = col * (1 - nan_mask)
 
-#     return img
-
-
-# def make_color_wheel():
-#     """
-#     Create colour wheel.
-#     Code adapted from https://github.com/liruoteng/FlowNet/blob/master/models/flownet/scripts/flowlib.py
-#     """
-#     red_yellow = 15
-#     yellow_green = 6
-#     green_cyan = 4
-#     cyan_blue = 11
-#     blue_magenta = 13
-#     magenta_red = 6
-
-#     ncols = red_yellow + yellow_green + green_cyan + \
-#         cyan_blue + blue_magenta + magenta_red
-#     colorwheel = np.zeros([ncols, 3])
-
-#     col = 0
-
-#     # red_yellow
-#     colorwheel[0:red_yellow, 0] = 255
-#     colorwheel[0:red_yellow, 1] = np.transpose(
-#         np.floor(255 * np.arange(0, red_yellow) / red_yellow))
-#     col += red_yellow
-
-#     # yellow_green
-#     colorwheel[col: col + yellow_green, 0] = 255 - np.transpose(
-#         np.floor(255 * np.arange(0, yellow_green) / yellow_green)
-#     )
-#     colorwheel[col: col + yellow_green, 1] = 255
-#     col += yellow_green
-
-#     # green_cyan
-#     colorwheel[col: col + green_cyan, 1] = 255
-#     colorwheel[col: col + green_cyan,
-#                2] = np.transpose(np.floor(255 * np.arange(0, green_cyan) / green_cyan))
-#     col += green_cyan
-
-#     # cyan_blue
-#     colorwheel[col: col + cyan_blue, 1] = 255 - \
-#         np.transpose(np.floor(255 * np.arange(0, cyan_blue) / cyan_blue))
-#     colorwheel[col: col + cyan_blue, 2] = 255
-#     col += cyan_blue
-
-#     # blue_magenta
-#     colorwheel[col: col + blue_magenta, 2] = 255
-#     colorwheel[col: col + blue_magenta, 0] = np.transpose(
-#         np.floor(255 * np.arange(0, blue_magenta) / blue_magenta))
-#     col += +blue_magenta
-
-#     # magenta_red
-#     colorwheel[col: col + magenta_red, 2] = 255 - \
-#         np.transpose(np.floor(255 * np.arange(0, magenta_red) / magenta_red))
-#     colorwheel[col: col + magenta_red, 0] = 255
-
-#     return colorwheel
+    return img
 
 
-# def make_contour(img, colour=[0, 0, 0], double_line=False):
-#     h, w = img.shape[:2]
-#     out = img.copy()
-#     # Vertical lines
-#     out[np.arange(h), np.repeat(0, h)] = colour
-#     out[np.arange(h), np.repeat(w - 1, h)] = colour
+def make_color_wheel():
+    """
+    Create colour wheel.
+    Code adapted from https://github.com/liruoteng/FlowNet/blob/master/models/flownet/scripts/flowlib.py
+    """
+    red_yellow = 15
+    yellow_green = 6
+    green_cyan = 4
+    cyan_blue = 11
+    blue_magenta = 13
+    magenta_red = 6
 
-#     # Horizontal lines
-#     out[np.repeat(0, w), np.arange(w)] = colour
-#     out[np.repeat(h - 1, w), np.arange(w)] = colour
+    ncols = red_yellow + yellow_green + green_cyan + \
+        cyan_blue + blue_magenta + magenta_red
+    colorwheel = np.zeros([ncols, 3])
 
-#     if double_line:
-#         out[np.arange(h), np.repeat(1, h)] = colour
-#         out[np.arange(h), np.repeat(w - 2, h)] = colour
+    col = 0
 
-#         # Horizontal lines
-#         out[np.repeat(1, w), np.arange(w)] = colour
-#         out[np.repeat(h - 2, w), np.arange(w)] = colour
-#     return out
+    # red_yellow
+    colorwheel[0:red_yellow, 0] = 255
+    colorwheel[0:red_yellow, 1] = np.transpose(
+        np.floor(255 * np.arange(0, red_yellow) / red_yellow))
+    col += red_yellow
+
+    # yellow_green
+    colorwheel[col: col + yellow_green, 0] = 255 - np.transpose(
+        np.floor(255 * np.arange(0, yellow_green) / yellow_green)
+    )
+    colorwheel[col: col + yellow_green, 1] = 255
+    col += yellow_green
+
+    # green_cyan
+    colorwheel[col: col + green_cyan, 1] = 255
+    colorwheel[col: col + green_cyan,
+               2] = np.transpose(np.floor(255 * np.arange(0, green_cyan) / green_cyan))
+    col += green_cyan
+
+    # cyan_blue
+    colorwheel[col: col + cyan_blue, 1] = 255 - \
+        np.transpose(np.floor(255 * np.arange(0, cyan_blue) / cyan_blue))
+    colorwheel[col: col + cyan_blue, 2] = 255
+    col += cyan_blue
+
+    # blue_magenta
+    colorwheel[col: col + blue_magenta, 2] = 255
+    colorwheel[col: col + blue_magenta, 0] = np.transpose(
+        np.floor(255 * np.arange(0, blue_magenta) / blue_magenta))
+    col += +blue_magenta
+
+    # magenta_red
+    colorwheel[col: col + magenta_red, 2] = 255 - \
+        np.transpose(np.floor(255 * np.arange(0, magenta_red) / magenta_red))
+    colorwheel[col: col + magenta_red, 0] = 255
+
+    return colorwheel
+
+
+def make_contour(img, colour=[0, 0, 0], double_line=False):
+    h, w = img.shape[:2]
+    out = img.copy()
+    # Vertical lines
+    out[np.arange(h), np.repeat(0, h)] = colour
+    out[np.arange(h), np.repeat(w - 1, h)] = colour
+
+    # Horizontal lines
+    out[np.repeat(0, w), np.arange(w)] = colour
+    out[np.repeat(h - 1, w), np.arange(w)] = colour
+
+    if double_line:
+        out[np.arange(h), np.repeat(1, h)] = colour
+        out[np.arange(h), np.repeat(w - 2, h)] = colour
+
+        # Horizontal lines
+        out[np.repeat(1, w), np.arange(w)] = colour
+        out[np.repeat(h - 2, w), np.arange(w)] = colour
+    return out
 
 
 def plot_instance_map(instance_image, instance_map, instance_colours=None, bg_image=None):
@@ -290,95 +290,95 @@ def plot_instance_map(instance_image, instance_map, instance_colours=None, bg_im
     return plot_image
 
 
-# def visualise_output(labels, output):
-#     assert labels is not None or output is not None
+def visualise_output(labels, output):
+    assert labels is not None or output is not None
 
-#     if labels is not None:
-#         sequence_length = labels['segmentation'].shape[1]
+    if labels is not None:
+        sequence_length = labels['segmentation'].shape[1]
 
-#     if output is not None:
-#         consistent_instance_seg = predict_instance_segmentation_and_trajectories(
-#             output, compute_matched_centers=False
-#         )
-#         sequence_length = consistent_instance_seg.shape[1]
+    if output is not None:
+        consistent_instance_seg = predict_instance_segmentation_and_trajectories(
+            output, compute_matched_centers=False
+        )
+        sequence_length = consistent_instance_seg.shape[1]
 
-#     semantic_colours = np.array([[255, 255, 255], [0, 0, 0]], dtype=np.uint8)
-#     b = 0
-#     video = []
-#     for t in range(sequence_length):
-#         out_t = []
-#         # Ground truth
-#         if labels is not None:
-#             unique_ids = torch.unique(
-#                 labels['instance'][b, t]).cpu().numpy()[1:]
-#             instance_map = dict(zip(unique_ids, unique_ids))
-#             instance_plot = plot_instance_map(
-#                 labels['instance'][b, t].cpu(), instance_map)[::-1]
-#             instance_plot = make_contour(instance_plot)
+    semantic_colours = np.array([[255, 255, 255], [0, 0, 0]], dtype=np.uint8)
+    b = 0
+    video = []
+    for t in range(sequence_length):
+        out_t = []
+        # Ground truth
+        if labels is not None:
+            unique_ids = torch.unique(
+                labels['instance'][b, t]).cpu().numpy()[1:]
+            instance_map = dict(zip(unique_ids, unique_ids))
+            instance_plot = plot_instance_map(
+                labels['instance'][b, t].cpu(), instance_map)[::-1]
+            instance_plot = make_contour(instance_plot)
 
-#             semantic_seg = labels['segmentation'].squeeze(2).cpu().numpy()
-#             semantic_plot = semantic_colours[semantic_seg[b, t][::-1]]
-#             semantic_plot = make_contour(semantic_plot)
+            semantic_seg = labels['segmentation'].squeeze(2).cpu().numpy()
+            semantic_plot = semantic_colours[semantic_seg[b, t][::-1]]
+            semantic_plot = make_contour(semantic_plot)
 
-#             future_flow_plot = labels['flow'][b, t].cpu().numpy()
-#             future_flow_plot[:, semantic_seg[b, t] != 1] = 0
-#             future_flow_plot = flow_to_image(future_flow_plot)[::-1]
-#             future_flow_plot = make_contour(future_flow_plot)
+            future_flow_plot = labels['flow'][b, t].cpu().numpy()
+            future_flow_plot[:, semantic_seg[b, t] != 1] = 0
+            future_flow_plot = flow_to_image(future_flow_plot)[::-1]
+            future_flow_plot = make_contour(future_flow_plot)
 
-#             center_plot = heatmap_image(
-#                 labels['centerness'][b, t, 0].cpu().numpy())[::-1]
-#             center_plot = make_contour(center_plot)
+            center_plot = heatmap_image(
+                labels['centerness'][b, t, 0].cpu().numpy())[::-1]
+            center_plot = make_contour(center_plot)
 
-#             offset_plot = labels['offset'][b, t].cpu().numpy()
-#             offset_plot[:, semantic_seg[b, t] != 1] = 0
-#             offset_plot = flow_to_image(offset_plot)[::-1]
-#             offset_plot = make_contour(offset_plot)
+            offset_plot = labels['offset'][b, t].cpu().numpy()
+            offset_plot[:, semantic_seg[b, t] != 1] = 0
+            offset_plot = flow_to_image(offset_plot)[::-1]
+            offset_plot = make_contour(offset_plot)
 
-#             out_t.append(np.concatenate([instance_plot, future_flow_plot,
-#                                         semantic_plot, center_plot, offset_plot], axis=0))
+            out_t.append(np.concatenate([instance_plot, future_flow_plot,
+                                        semantic_plot, center_plot, offset_plot], axis=0))
 
-#         # Predictions
-#         if output is not None:
-#             unique_ids = torch.unique(
-#                 consistent_instance_seg[b, t]).cpu().numpy()[1:]
-#             instance_map = dict(zip(unique_ids, unique_ids))
-#             instance_plot = plot_instance_map(
-#                 consistent_instance_seg[b, t].cpu(), instance_map)[::-1]
-#             instance_plot = make_contour(instance_plot)
+        # Predictions
+        if output is not None:
+            unique_ids = torch.unique(
+                consistent_instance_seg[b, t]).cpu().numpy()[1:]
+            instance_map = dict(zip(unique_ids, unique_ids))
+            instance_plot = plot_instance_map(
+                consistent_instance_seg[b, t].cpu(), instance_map)[::-1]
+            instance_plot = make_contour(instance_plot)
 
-#             semantic_seg = output['segmentation'].argmax(
-#                 dim=2).detach().cpu().numpy()
-#             semantic_plot = semantic_colours[semantic_seg[b, t][::-1]]
-#             semantic_plot = make_contour(semantic_plot)
+            semantic_seg = output['segmentation'].argmax(
+                dim=2).detach().cpu().numpy()
+            semantic_plot = semantic_colours[semantic_seg[b, t][::-1]]
+            semantic_plot = make_contour(semantic_plot)
 
-#             future_flow_plot = output['instance_flow'][b,
-#                                                        t].detach().cpu().numpy()
-#             future_flow_plot[:, semantic_seg[b, t] != 1] = 0
-#             future_flow_plot = flow_to_image(future_flow_plot)[::-1]
-#             future_flow_plot = make_contour(future_flow_plot)
+            future_flow_plot = output['instance_flow'][b,
+                                                       t].detach().cpu().numpy()
+            future_flow_plot[:, semantic_seg[b, t] != 1] = 0
+            future_flow_plot = flow_to_image(future_flow_plot)[::-1]
+            future_flow_plot = make_contour(future_flow_plot)
 
-#             center_plot = heatmap_image(
-#                 output['instance_center'][b, t, 0].detach().cpu().numpy())[::-1]
-#             center_plot = make_contour(center_plot)
+            center_plot = heatmap_image(
+                output['instance_center'][b, t, 0].detach().cpu().numpy())[::-1]
+            center_plot = make_contour(center_plot)
 
-#             offset_plot = output['instance_offset'][b,
-#                                                     t].detach().cpu().numpy()
-#             offset_plot[:, semantic_seg[b, t] != 1] = 0
-#             offset_plot = flow_to_image(offset_plot)[::-1]
-#             offset_plot = make_contour(offset_plot)
+            offset_plot = output['instance_offset'][b,
+                                                    t].detach().cpu().numpy()
+            offset_plot[:, semantic_seg[b, t] != 1] = 0
+            offset_plot = flow_to_image(offset_plot)[::-1]
+            offset_plot = make_contour(offset_plot)
 
-#             out_t.append(np.concatenate([instance_plot, future_flow_plot,
-#                                         semantic_plot, center_plot, offset_plot], axis=0))
+            out_t.append(np.concatenate([instance_plot, future_flow_plot,
+                                        semantic_plot, center_plot, offset_plot], axis=0))
 
-#         out_t = np.concatenate(out_t, axis=1)
-#         # Shape (C, H, W)
-#         out_t = out_t.transpose((2, 0, 1))
-#         video.append(out_t)
+        out_t = np.concatenate(out_t, axis=1)
+        # Shape (C, H, W)
+        out_t = out_t.transpose((2, 0, 1))
+        video.append(out_t)
 
-#     # Shape (B, T, C, H, W)
-#     video = np.stack(video)[None]
+    # Shape (B, T, C, H, W)
+    video = np.stack(video)[None]
 
-#     return video
+    return video
 
 
 # def plot_motion_prediction(motion_preds):

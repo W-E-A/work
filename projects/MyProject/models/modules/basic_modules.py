@@ -529,7 +529,7 @@ class V2X_fusion(nn.Module):
             in_channels,
             num_agents,
             input_shape,
-            grid_conf=None,
+            pc_range,
             start_out_channels=64,
             extra_in_channels=0,
             n_spatial_layers_between_temporal_layers=0,
@@ -543,7 +543,7 @@ class V2X_fusion(nn.Module):
         self.num_agents = num_agents
         self.compression_conv = compression_conv
         self.input_relative_pose = input_relative_pose
-        self.warper = FeatureWarper(grid_conf=grid_conf)
+        self.warper = FeatureWarper(pc_range)
 
         h, w = input_shape
         modules = []

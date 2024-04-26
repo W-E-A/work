@@ -42,7 +42,7 @@ class MTHead(BaseModule):
             motion_head.update(test_cfg=self.test_cfg)
             self.motion_head = MODELS.build(motion_head)
 
-    def forward(self, feats: Union[Tensor, List[Tensor]], targets=None) -> dict:
+    def forward(self, feats: Union[Tensor, List[Tensor]], targets: Optional[dict] = None) -> dict:
         return_dict = {}
         if not isinstance(feats, Sequence):
             feats = [feats]
@@ -80,10 +80,10 @@ class MTHead(BaseModule):
             else:
                 loss_dict.update(temp_dict)
 
-        if 'motion_feat' in feat_dict and motion_gt != None:
+        if 'motion_feat' in feat_dict :
             multi_tasks_multi_feats = feat_dict['motion_feat']
             # FIXME just one scale here
-            temp_dict = self.motion_head.loss_by_feat(multi_tasks_multi_feats, **motion_gt) # type: ignore
+            temp_dict = self.motion_head.loss(multi_tasks_multi_feats) # type: ignore
             if gather_task_loss:
                 gather_dict = {}
                 for key in temp_dict.keys():
