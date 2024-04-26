@@ -133,9 +133,13 @@ def main():
                             && source /root/miniconda3/bin/activate \
                             && nvidia-smi \
                             && conda activate py38t191 \
+                            && pip install -i https://pkgs.d.xiaomi.net/artifactory/api/pypi/pypi-virtual/simple mmcv==2.0.0rc4 --force-reinstall \
                             && ls . \
-                            && python setup.py develop \
+                            && export TORCH_CUDA_ARCH_LIST="7.5" \
                             && export NCCL_IB_DISABLE=1 \
+                            && export PYTHONPATH=./ \
+                            && pip install -i https://pkgs.d.xiaomi.net/artifactory/api/pypi/pypi-virtual/simple numpy==1.22.0 \
+                            && pip install -e . \
                             && {train_command} "\
                         -pn {args.node} \
                         -nas {nas_mounts}'
