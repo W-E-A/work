@@ -127,10 +127,10 @@ def main():
                         -p {env} \
                         -dc " mkdir data \
                             && ln -s /mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/{jceph_root} /{jceph_root} \
-                            && cd /mnt/auto-labeling/wyc/work \
+                            && cd /mnt/auto-labeling/wyc/wyc-motion/deepaccident \
                             && git checkout dev-wyc-motion \
                             && git pull \
-                            && source /opt/conda/bin/activate \
+                            && source /root/miniconda3/bin/activate \
                             && nvidia-smi \
                             && conda activate py38t191 \
                             && ls . \
