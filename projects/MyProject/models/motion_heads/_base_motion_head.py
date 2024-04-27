@@ -11,7 +11,6 @@ from ...utils.instance import predict_instance_segmentation_and_trajectories
 from ...utils.warper import FeatureWarper
 from ..utils import BevFeatureSlicer
 
-# from ...visualize import Visualizer
 from ..modules.motion_modules import ResFuturePrediction, SpatialDistributionModule, DistributionModule
 import scipy
 
@@ -54,7 +53,7 @@ class BaseMotionHead(BaseTaskHead):
         # settings: others
         train_cfg=None,
         test_cfg=None,
-        init_cfg=None,
+        init_cfg=dict(type='Kaiming', layer='Conv2d'),
         **kwargs,
     ):
         super(BaseMotionHead, self).__init__(
@@ -82,7 +81,6 @@ class BaseMotionHead(BaseTaskHead):
         self.ignore_index = ignore_index
         self.using_focal_loss = using_focal_loss
 
-        # self.visualizer = Visualizer(out_dir='train_visualize')
         self.warper = FeatureWarper(pc_range=new_grid_conf[0])
         self.cropper =  BevFeatureSlicer(grid_conf, new_grid_conf)
         if self.n_future > 0:
@@ -224,7 +222,6 @@ class BaseMotionHead(BaseTaskHead):
             self.task_heads['instance_center'][-1].bias.data.fill_(
                 self.init_bias)
 
-
     def distribution_forward(
         self,
         present_features,
@@ -246,7 +243,7 @@ class BaseMotionHead(BaseTaskHead):
             future_distribution_mu: shape (b, s, latent_dim)
             future_distribution_log_sigma: shape (b, s, latent_dim)
         """
-        b, s, _, h, w = present_features.size()
+        b, s, _, h, w = present_features.size()  # b, 1, 384, 200, 200
         assert s == 1
         # import pdb;pdb.set_trace()
         present_mu, present_log_sigma = self.present_distribution(
@@ -342,13 +339,13 @@ class BaseMotionHead(BaseTaskHead):
             'future_log_sigma': future_log_sigma, # 测试时没有 # B 1 dim
         }
 
-        return samples, output_distribution # B 1 dim 200 200
+        return samples, output_distribution # B 1 dim 200 200 and dict
 
     def prepare_future_labels(self, batch, center_sampling_mode='nearest'):
         labels = {}
         future_distribution_inputs = []
         segmentation_labels = torch.stack(batch['motion_segmentation']) # B, len, H, W
-        instance_center_labels = torch.stack(batch['instance_centerness']) # B, len, 1, H, W
+        instance_center_labels = torch.stack(batch['instance_centerness']) # B, len, H, W
         instance_offset_labels = torch.stack(batch['instance_offset']) # B, len, 2, H, W
         instance_flow_labels = torch.stack(batch['instance_flow']) # B, len, 2, H, W
         gt_instance = torch.stack(batch['motion_instance']) # B, len, H, W
@@ -365,16 +362,16 @@ class BaseMotionHead(BaseTaskHead):
             segmentation_labels.float().unsqueeze(2), # B, len, 1, H, W
             future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
-        ).long().contiguous()
-        labels['segmentation'] = segmentation_labels
+        ).long().contiguous() # to long(0 or 1)
+        labels['segmentation'] = segmentation_labels  # B, len, 1, H, W
         future_distribution_inputs.append(segmentation_labels)
 
         # Warp instance labels to present's reference frame
         gt_instance = self.warper.cumulative_warp_features_reverse(
-            gt_instance.float().unsqueeze(2),
+            gt_instance.float().unsqueeze(2), # B, len, 1, H, W
             future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
-        ).long().contiguous()[:, :, 0]
+        ).long().contiguous()[:, :, 0] # to long(0, 1~254, 255) # B, len, H, W
         labels['instance'] = gt_instance
 
         instance_center_labels = self.warper.cumulative_warp_features_reverse(
@@ -382,14 +379,14 @@ class BaseMotionHead(BaseTaskHead):
             future_egomotion,
             mode=center_sampling_mode, bev_transform=bev_transform,
         ).contiguous()
-        labels['centerness'] = instance_center_labels
+        labels['centerness'] = instance_center_labels # B, len, 1, H, W
 
         instance_offset_labels = self.warper.cumulative_warp_features_reverse(
             instance_offset_labels,
             future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
         ).contiguous()
-        labels['offset'] = instance_offset_labels
+        labels['offset'] = instance_offset_labels # B, len, 2, H, W
 
         future_distribution_inputs.append(instance_center_labels)
         future_distribution_inputs.append(instance_offset_labels)
@@ -399,15 +396,12 @@ class BaseMotionHead(BaseTaskHead):
             future_egomotion,
             mode=label_mode, bev_transform=bev_transform,
         ).contiguous()
-        labels['flow'] = instance_flow_labels
+        labels['flow'] = instance_flow_labels # B, len, 2, H, W
         future_distribution_inputs.append(instance_flow_labels)
 
         if len(future_distribution_inputs) > 0:
             future_distribution_inputs = torch.cat(
-                future_distribution_inputs, dim=2)
-
-        # self.visualizer.visualize_motion(labels=labels)
-        # pdb.set_trace()
+                future_distribution_inputs, dim=2) #  # B, len, 1+1+2+2, H, W
 
         return labels, future_distribution_inputs # dict tensor B len 1+1+2+2 200, 200
 
@@ -423,66 +417,65 @@ class BaseMotionHead(BaseTaskHead):
         '''
         
         for key, val in self.training_labels.items():
-            self.training_labels[key] = val.float()
+            self.training_labels[key] = val.float() # seg 01 to float others remain unchanged(float)
         # import pdb;pdb.set_trace()
-        frame_valid_mask = torch.tensor([True] * (self.receptive_field + self.n_future)).unsqueeze(0)
-        frame_valid_mask = frame_valid_mask.repeat(self.training_labels['segmentation'].shape[0], 1).bool()
+        frame_valid_mask = torch.tensor([True] * (self.receptive_field + self.n_future)).unsqueeze(0) # all valid 1, len
+        frame_valid_mask = frame_valid_mask.repeat(self.training_labels['segmentation'].shape[0], 1).bool() # B, len
         past_valid_mask = frame_valid_mask[:, :self.receptive_field]
         future_frame_mask = frame_valid_mask[:, (self.receptive_field - 1):]
 
-        if self.sample_ignore_mode is 'all_valid':
+        if self.sample_ignore_mode == 'all_valid':
             # only supervise when all 7 frames are valid
             batch_valid_mask = frame_valid_mask.all(dim=1)
             future_frame_mask[~batch_valid_mask] = False
             prob_valid_mask = batch_valid_mask
 
-        elif self.sample_ignore_mode is 'past_valid':
+        elif self.sample_ignore_mode == 'past_valid':
             # only supervise when past 3 frames are valid
             past_valid = torch.all(past_valid_mask, dim=1)
             future_frame_mask[~past_valid] = False
             prob_valid_mask = past_valid
 
-        elif self.sample_ignore_mode is 'none':
+        elif self.sample_ignore_mode == 'none':
             prob_valid_mask = frame_valid_mask.any(dim=1)
-
 
         # segmentation
         loss_dict['loss_motion_seg'] = self.seg_criterion(
-            predictions['segmentation'], self.training_labels['segmentation'].long(),
+            predictions['segmentation'], self.training_labels['segmentation'].long(), # again to long
             frame_mask=future_frame_mask,
-        )
+        ) # B, len, 2, 200, 200  B, len, 1, 200, 200, onehot
 
         # instance centerness, but why not focal loss
         if self.using_focal_loss:
             loss_dict['loss_motion_centerness'] = self.cls_instance_center_criterion(
                 predictions['instance_center'], self.training_labels['centerness'],
                 frame_mask=future_frame_mask,
-            )
+            ) # B, len, 1, 200, 200  B, len, 1, 200, 200
         else:
             loss_dict['loss_motion_centerness'] = self.reg_instance_center_criterion(
                 predictions['instance_center'], self.training_labels['centerness'],
                 frame_mask=future_frame_mask,
-            )
+            ) # B, len, 1, 200, 200  B, len, 1, 200, 200
 
         # instance offset
         loss_dict['loss_motion_offset'] = self.reg_instance_offset_criterion(
             predictions['instance_offset'], self.training_labels['offset'],
             frame_mask=future_frame_mask,
-        )
+        ) # B, len, 2, 200, 200  B, len, 2, 200, 200
 
         if self.n_future > 0:
             # instance flow
             loss_dict['loss_motion_flow'] = self.reg_instance_flow_criterion(
                 predictions['instance_flow'], self.training_labels['flow'],
                 frame_mask=future_frame_mask,
-            )
+            ) # B, len, 2, 200, 200  B, len, 2, 200, 200
 
             if self.probabilistic_enable:
                 loss_dict['loss_motion_prob'] = self.probabilistic_loss(
-                    predictions,
+                    predictions, # present future / mu sigma
                     foreground_mask=self.training_labels['segmentation'],
                     batch_valid_mask=prob_valid_mask,
-                )
+                ) # ??? FIXME
 
         for key in loss_dict:
             loss_dict[key] *= self.loss_weights.get(key, 1.0)
@@ -492,11 +485,11 @@ class BaseMotionHead(BaseTaskHead):
     def inference(self, predictions):
         # [b, s, num_cls, h, w]
         seg_prediction = torch.argmax(
-            predictions['segmentation'], dim=2, keepdims=True)
+            predictions['segmentation'], dim=2, keepdims=True) # B, len, 1, H, W
 
         if self.using_focal_loss:
             predictions['instance_center'] = torch.sigmoid(
-                predictions['instance_center'])
+                predictions['instance_center']) # B, len, 1, H, W
 
         pred_consistent_instance_seg = predict_instance_segmentation_and_trajectories(
             predictions, compute_matched_centers=False,

@@ -52,13 +52,14 @@ class IterativeFlow(BaseMotionHead):
         # import pdb;pdb.set_trace()
         bevfeats = bevfeats[0] # b, 384, 256, 256 输入应该是结合了历史bev信息也就是temporal模块的bev特征，或者是单帧的BEV特征
         bevfeats = self.cropper(bevfeats) # b, 384, 200, 200
-        # visualize_feature(bevfeats)
 
         if self.training or self.posterior_with_label:
             self.training_labels, future_distribution_inputs = self.prepare_future_labels(
                 targets)
         else:
             future_distribution_inputs = None
+        
+        # future_distribution_inputs  B len 1+1+2+2 200, 200 or None
 
         if not self.training:
             res = list()
@@ -88,8 +89,6 @@ class IterativeFlow(BaseMotionHead):
                         res_single[task_key] = task_head(
                             flatten_states).view(batch, seq, -1, h, w)
 
-                    # visualize_feature(res_single['segmentation'][0, :, 1:2])
-
                     res.append(res_single)
             else:
                 b, _, h, w = bevfeats.shape
@@ -106,20 +105,20 @@ class IterativeFlow(BaseMotionHead):
                 )
 
                 b, _, _, h, w = present_state.shape
-                hidden_state = present_state[:, 0]
+                hidden_state = present_state[:, 0] # b 384 200 200
 
-                future_states = self.future_prediction(sample, hidden_state) #input B, 1, dim, 200, 200 and B, 384, 200, 200 output 1,5,384,200,200
+                future_states = self.future_prediction(sample, hidden_state) # GRUS and so on, input B, 1, dim, 200, 200 and B, 384, 200, 200 output 1,5,384,200,200
                 future_states = torch.cat([present_state, future_states], dim=1) #(B,1,384,200,200) cat (B,5,384,200,200)
                 # flatten dimensions of (batch, sequence)
                 batch, seq = future_states.shape[:2]
-                flatten_states = future_states.flatten(0, 1) #(6,384,200,200)
+                flatten_states = future_states.flatten(0, 1) #(B*6,384,200,200)
 
                 if self.training:
                     res.update(output_distribution)
 
                 for task_key, task_head in self.task_heads.items():
                     res[task_key] = task_head(
-                        flatten_states).view(batch, seq, -1, h, w)
+                        flatten_states).view(batch, seq, -1, h, w) # for seg? (B*6,384,200,200) -> (B*6,2,200,200) -> (B,6,2,200,200)
             else:
                 b, _, h, w = bevfeats.shape
                 for task_key, task_head in self.task_heads.items():
@@ -127,40 +126,3 @@ class IterativeFlow(BaseMotionHead):
 
         # import pdb;pdb.set_trace()
         return res
-
-
-def heatmap2d(arr_list):
-    import matplotlib.pyplot as plt
-    import numpy as np
-    if torch.is_tensor(arr_list):
-        array_tmp = arr_list.detach().clone().cpu().numpy()
-        # batch, channel, height, width = array_tmp.shape
-        # array_tmp = array_tmp[:, 0, :, :]
-
-    for i, arr in enumerate(array_tmp):
-        arr_show = arr.copy()
-        arr_show -= arr_show.mean()
-        arr_show /= arr_show.std()
-        # # feature = np.clip(feature, 0, 255).astype('uint8')
-        # arr_show = arr_show.astype('float32')
-        arr_show *= 64
-        arr_show += 128
-        arr_show = np.clip(arr_show, 0, 255).astype('uint8')
-
-        plt.figure('Figure %d' % i)
-        plt.imshow(arr_show, cmap='viridis')
-        plt.colorbar()
-    plt.show()
-
-
-def visualize_feature(input_feature):
-    import numpy as np
-    features = input_feature.detach().clone().cpu().numpy()
-    avg_feature = []
-    for agent_idx in range(features.shape[0]):
-        feature = np.mean(features[agent_idx], axis=0)
-        avg_feature.append(feature)
-
-    avg_feature = np.array(avg_feature)
-    avg_feature = torch.from_numpy(avg_feature)
-    heatmap2d(avg_feature)

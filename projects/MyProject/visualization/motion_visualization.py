@@ -7,7 +7,7 @@ import cv2
 
 from ..utils import predict_instance_segmentation_and_trajectories
 
-# DEFAULT_COLORMAP = matplotlib.pylab.cm.jet
+DEFAULT_COLORMAP = matplotlib.pylab.cm.jet
 INSTANCE_COLOURS = np.asarray([
     [0, 0, 0],
     [255, 179, 0],
@@ -103,54 +103,54 @@ def flow_to_image(flow: np.ndarray, autoscale: bool = False):
     return np.uint8(compute_color(u, v) * 255)
 
 
-# def _normalise(image: np.ndarray):
-#     lower = np.min(image)
-#     delta = np.max(image) - lower
-#     if delta == 0:
-#         delta = 1
-#     image = (image.astype(np.float32) - lower) / delta
-#     return image
+def _normalise(image: np.ndarray):
+    lower = np.min(image)
+    delta = np.max(image) - lower
+    if delta == 0:
+        delta = 1
+    image = (image.astype(np.float32) - lower) / delta
+    return image
 
 
-# def apply_colour_map(
-#     image: np.ndarray, cmap: matplotlib.colors.LinearSegmentedColormap = DEFAULT_COLORMAP, autoscale: bool = False
-# ):
-#     """
-#     Applies a colour map to the given 1 or 2 channel numpy image. if 2 channel, must be 2xHxW.
-#     Returns a HxWx3 numpy image
-#     """
-#     if image.ndim == 2 or (image.ndim == 3 and image.shape[0] == 1):
-#         if image.ndim == 3:
-#             image = image[0]
-#         # grayscale scalar image
-#         if autoscale:
-#             image = _normalise(image)
-#         return cmap(image)[:, :, :3]
-#     if image.shape[0] == 2:
-#         # 2 dimensional UV
-#         return flow_to_image(image, autoscale=autoscale)
-#     if image.shape[0] == 3:
-#         # normalise rgb channels
-#         if autoscale:
-#             image = _normalise(image)
-#         return np.transpose(image, axes=[1, 2, 0])
-#     raise Exception(
-#         'Image must be 1, 2 or 3 channel to convert to colour_map (CxHxW)')
+def apply_colour_map(
+    image: np.ndarray, cmap: matplotlib.colors.LinearSegmentedColormap = DEFAULT_COLORMAP, autoscale: bool = False
+):
+    """
+    Applies a colour map to the given 1 or 2 channel numpy image. if 2 channel, must be 2xHxW.
+    Returns a HxWx3 numpy image
+    """
+    if image.ndim == 2 or (image.ndim == 3 and image.shape[0] == 1):
+        if image.ndim == 3:
+            image = image[0]
+        # grayscale scalar image
+        if autoscale:
+            image = _normalise(image)
+        return cmap(image)[:, :, :3]
+    if image.shape[0] == 2:
+        # 2 dimensional UV
+        return flow_to_image(image, autoscale=autoscale)
+    if image.shape[0] == 3:
+        # normalise rgb channels
+        if autoscale:
+            image = _normalise(image)
+        return np.transpose(image, axes=[1, 2, 0])
+    raise Exception(
+        'Image must be 1, 2 or 3 channel to convert to colour_map (CxHxW)')
 
 
-# def heatmap_image(
-#     image: np.ndarray, cmap: matplotlib.colors.LinearSegmentedColormap = DEFAULT_COLORMAP, autoscale: bool = True
-# ):
-#     """Colorize an 1 or 2 channel image with a colourmap."""
-#     if not issubclass(image.dtype.type, np.floating):
-#         raise ValueError(
-#             f"Expected a ndarray of float type, but got dtype {image.dtype}")
-#     if not (image.ndim == 2 or (image.ndim == 3 and image.shape[0] in [1, 2])):
-#         raise ValueError(
-#             f"Expected a ndarray of shape [H, W] or [1, H, W] or [2, H, W], but got shape {image.shape}")
-#     heatmap_np = apply_colour_map(image, cmap=cmap, autoscale=autoscale)
-#     heatmap_np = np.uint8(heatmap_np * 255)
-#     return heatmap_np
+def heatmap_image(
+    image: np.ndarray, cmap: matplotlib.colors.LinearSegmentedColormap = DEFAULT_COLORMAP, autoscale: bool = True
+):
+    """Colorize an 1 or 2 channel image with a colourmap."""
+    if not issubclass(image.dtype.type, np.floating):
+        raise ValueError(
+            f"Expected a ndarray of float type, but got dtype {image.dtype}")
+    if not (image.ndim == 2 or (image.ndim == 3 and image.shape[0] in [1, 2])):
+        raise ValueError(
+            f"Expected a ndarray of shape [H, W] or [1, H, W] or [2, H, W], but got shape {image.shape}")
+    heatmap_np = apply_colour_map(image, cmap=cmap, autoscale=autoscale)
+    heatmap_np = np.uint8(heatmap_np * 255)
+    return heatmap_np
 
 
 def compute_color(u: np.ndarray, v: np.ndarray):
@@ -290,8 +290,15 @@ def plot_instance_map(instance_image, instance_map, instance_colours=None, bg_im
     return plot_image
 
 
-def visualise_output(labels, output):
+def visualise_output(labels, output, display_order: str = 'vertical'):
     assert labels is not None or output is not None
+    assert display_order in ['vertical', 'horizon']
+    if display_order == 'vertical':
+        ax1 = 0
+        ax2 = 1
+    else:
+        ax1 = 1
+        ax2 = 0
 
     if labels is not None:
         sequence_length = labels['segmentation'].shape[1]
@@ -303,7 +310,7 @@ def visualise_output(labels, output):
         sequence_length = consistent_instance_seg.shape[1]
 
     semantic_colours = np.array([[255, 255, 255], [0, 0, 0]], dtype=np.uint8)
-    b = 0
+    b = 0 # only display the first
     video = []
     for t in range(sequence_length):
         out_t = []
@@ -335,7 +342,7 @@ def visualise_output(labels, output):
             offset_plot = make_contour(offset_plot)
 
             out_t.append(np.concatenate([instance_plot, future_flow_plot,
-                                        semantic_plot, center_plot, offset_plot], axis=0))
+                                        semantic_plot, center_plot, offset_plot], axis=ax1))
 
         # Predictions
         if output is not None:
@@ -368,42 +375,42 @@ def visualise_output(labels, output):
             offset_plot = make_contour(offset_plot)
 
             out_t.append(np.concatenate([instance_plot, future_flow_plot,
-                                        semantic_plot, center_plot, offset_plot], axis=0))
+                                        semantic_plot, center_plot, offset_plot], axis=ax1))
 
-        out_t = np.concatenate(out_t, axis=1)
+        out_t = np.concatenate(out_t, axis=ax2)
         # Shape (C, H, W)
         out_t = out_t.transpose((2, 0, 1))
         video.append(out_t)
 
     # Shape (B, T, C, H, W)
-    video = np.stack(video)[None]
+    video = np.stack(video)[None] # add batch dim
 
     return video
 
 
-# def plot_motion_prediction(motion_preds):
-#     consistent_instance_seg, matched_centers = predict_instance_segmentation_and_trajectories(motion_preds, compute_matched_centers=True)
-#     unique_ids = torch.unique(
-#         consistent_instance_seg[0, 0]).cpu().long().numpy()[1:]
-#     instance_map = dict(zip(unique_ids, unique_ids))
-#     instance_colours = generate_instance_colours(instance_map)
-#     vis_image = plot_instance_map(
-#         consistent_instance_seg[0, 0].cpu().numpy(), instance_map)
+def plot_motion_prediction(motion_preds):
+    consistent_instance_seg, matched_centers = predict_instance_segmentation_and_trajectories(motion_preds, compute_matched_centers=True)
+    unique_ids = torch.unique(
+        consistent_instance_seg[0, 0]).cpu().long().numpy()[1:]
+    instance_map = dict(zip(unique_ids, unique_ids))
+    instance_colours = generate_instance_colours(instance_map)
+    vis_image = plot_instance_map(
+        consistent_instance_seg[0, 0].cpu().numpy(), instance_map)
 
-#     trajectory_img = np.zeros(vis_image.shape, dtype=np.uint8)
-#     for instance_id in unique_ids:
-#         path = matched_centers[instance_id]
-#         for t in range(len(path) - 1):
-#             color = instance_colours[instance_id].tolist()
-#             cv2.line(trajectory_img, tuple(
-#                 path[t]), tuple(path[t + 1]), color, 4)
+    trajectory_img = np.zeros(vis_image.shape, dtype=np.uint8)
+    for instance_id in unique_ids:
+        path = matched_centers[instance_id]
+        for t in range(len(path) - 1):
+            color = instance_colours[instance_id].tolist()
+            cv2.line(trajectory_img, tuple(
+                path[t]), tuple(path[t + 1]), color, 4)
 
-#     # Overlay arrows
-#     temp_img = cv2.addWeighted(vis_image, 0.7, trajectory_img, 0.3, 1.0)
-#     mask = ~ np.all(trajectory_img == 0, axis=2)
-#     vis_image[mask] = temp_img[mask]
+    # Overlay arrows
+    temp_img = cv2.addWeighted(vis_image, 0.7, trajectory_img, 0.3, 1.0)
+    mask = ~ np.all(trajectory_img == 0, axis=2)
+    vis_image[mask] = temp_img[mask]
 
-#     return vis_image
+    return vis_image
 
 # def convert_figure_numpy(figure):
 #     """ Convert figure to numpy image """
@@ -421,3 +428,11 @@ def generate_instance_colours(instance_map):
     return {instance_id: INSTANCE_COLOURS[global_instance_id % len(INSTANCE_COLOURS)] for
             instance_id, global_instance_id in instance_map.items()
             }
+
+
+# def flip_rotate_image(image):
+#     pil_img = Image.fromarray(image)
+#     pil_img = pil_img.transpose(Image.FLIP_TOP_BOTTOM)
+#     pil_img = pil_img.transpose(Image.ROTATE_90)
+
+#     return np.array(pil_img)

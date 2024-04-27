@@ -396,8 +396,6 @@ class MakeMotionLabels(BaseTransform):
         vehicle_id_list: list = [0, 1, 2],
         filter_invalid: bool = True,
         ignore_index:int = 255,
-        visualizer_cfg: dict = None,
-        just_save_root: str = None,
         ) -> None:
         self.pc_range = pc_range
         self.voxel_size = voxel_size
@@ -417,12 +415,6 @@ class MakeMotionLabels(BaseTransform):
         self.vehicle_id_list = vehicle_id_list
         self.filter_invalid = filter_invalid
         self.ignore_index = ignore_index
-        self.visualizer = None
-        if visualizer_cfg is not None:
-            self.visualizer: SimpleLocalVisualizer = VISUALIZERS.build(visualizer_cfg)
-            assert just_save_root != None
-            os.makedirs(just_save_root, exist_ok=True)
-        self.just_save_root = just_save_root
 
     def transform(self, input_dict) -> Union[Dict,Tuple[List, List],None]:
         sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
@@ -504,14 +496,6 @@ class MakeMotionLabels(BaseTransform):
                 'future_egomotion': torch.from_numpy(future_motion_rela_matrix[j]) # len, 4, 4 ident at 0
             }
             input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
-            if self.visualizer:
-                save_path = os.path.join(self.just_save_root, f'{sample_idx}', f'{agent}')
-                os.makedirs(save_path, exist_ok=True)
-
-                for ts, instance in enumerate(instances):
-                    self.visualizer.draw_instance_label(instance, ignore_index = self.ignore_index)
-                    self.visualizer.just_save(os.path.join(save_path, f"instance_{ts}.png"))
-                    self.visualizer.clean()
         return input_dict
 
 

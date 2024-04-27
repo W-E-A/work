@@ -2,6 +2,9 @@ import imageio
 from glob import glob
 import os
 
+"""
+deprecated, please use the 'PIL.Image save() method to save gif or png'
+"""
 
 def to_gif(root_path, fps):
 # 把场景序列文件放到一个文件夹，然后输出gif图像
@@ -43,11 +46,12 @@ def prefix_to_gif(root_path, prefix, fps):
     
 
 if __name__ == '__main__':
+    pass
     # ROOT_PATH = './data/motion/2282'
     # fps = 2
     # to_gif(ROOT_PATH, fps)
-    prefix_to_gif('./data/motion/2282', 'instance', 2)
-    prefix_to_gif('./data/motion/2282', 'center', 2)
+    # prefix_to_gif('./data/motion/2282', 'instance', 2)
+    # prefix_to_gif('./data/motion/2282', 'center', 2)
 
 
 # import imageio

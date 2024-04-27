@@ -171,13 +171,6 @@ train_scene_pipline = [
         vehicle_id_list = [0, 1, 2],
         filter_invalid = True,
         ignore_index = 255,
-        # visualizer_cfg = dict(
-        #     type='SimpleLocalVisualizer',
-        #     pc_range=motion_range,
-        #     voxel_size=motion_voxel_size,
-        #     name='visualizer',
-        # ),
-        # just_save_root = './data/motion',
     ),
     dict(type='GatherHistoryPoint', pad_delay = pad_delay, impl = False), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),
@@ -222,13 +215,6 @@ test_scene_pipline = [
         vehicle_id_list = [0, 1, 2],
         filter_invalid = True,
         ignore_index = 255,
-        # visualizer_cfg = dict(
-        #     type='SimpleLocalVisualizer',
-        #     pc_range=motion_range,
-        #     voxel_size=motion_voxel_size,
-        #     name='visualizer',
-        # ),
-        # just_save_root = './data/motion',
     ),
     dict(type='GatherHistoryPoint', pad_delay = pad_delay, impl = False), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),

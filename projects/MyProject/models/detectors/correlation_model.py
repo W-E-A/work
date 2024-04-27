@@ -166,52 +166,30 @@ class CorrelationModel(MVXTwoStageDetector):
         motion_label = present_seq[self.inf_id]['motion_label'] # infrastructure FIXME
 
         ################################ INPUT DEBUG (stop here)################################
-        # assert batch_size == 1
-        # scene_info_0.pop('pose_matrix')
-        # scene_info_0.pop('future_motion_matrix')
-        # scene_info_0.pop('loc_matrix')
-        # scene_info_0.pop('future_motion_rela_matrix')
-        # log(scene_info_0)
-        # sample_idx = scene_info_0.sample_idx
+        assert batch_size == 1
+        scene_info_0.pop('pose_matrix')
+        scene_info_0.pop('future_motion_matrix')
+        scene_info_0.pop('loc_matrix')
+        scene_info_0.pop('future_motion_rela_matrix')
+        log(scene_info_0)
+        sample_idx = scene_info_0.sample_idx
 
-        # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+        visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
         
-        # visualizer.set_points(present_seq[self.inf_id]['inputs']['points'][0].cpu().numpy())
-        # os.makedirs(f'./data/motion/{sample_idx}', exist_ok=True)
-        # visualizer.just_save(f'./data/motion/{sample_idx}/lidar_bev.png')
-        # visualizer.clean()
+        visualizer.set_points(present_seq[self.inf_id]['inputs']['points'][0].cpu().numpy())
+        os.makedirs(f'./data/motion/{sample_idx}', exist_ok=True)
+        visualizer.just_save(f'./data/motion/{sample_idx}/lidar_bev.png')
+        visualizer.clean()
 
-        # instances = motion_label['motion_instance'][0].cpu() # batch len h w
+        labels, _ = self.multi_task_head.motion_head.prepare_future_labels(motion_label)
+        visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True)
 
-        # for ts, instance in enumerate(instances):
-        #     visualizer.draw_instance_label(instance)
-        #     visualizer.just_save(f'./data/motion/{sample_idx}/instance_{ts}.png')
-        #     visualizer.clean()
-
-        # future_egomotion = torch.stack(motion_label['future_egomotion']) # 1, len, 4, 4
-        # instance_center_labels = torch.stack(motion_label['instance_centerness']) # 1 len h w
-        # instance_center_labels = self.warper.cumulative_warp_features_reverse(
-        #     instance_center_labels,
-        #     future_egomotion,
-        #     mode='nearest'
-        # ).contiguous() # 1 len h w
-
-        # for ts, center in enumerate(instance_center_labels[0]):
-        #     visualizer.draw_featmap(center)
-        #     visualizer.just_save(f'./data/motion/{sample_idx}/center_{ts}.png')
-        #     visualizer.clean()
-
-        # labels, _ = self.multi_task_head.motion_head.prepare_future_labels(motion_label)
-    
-        # visualizer.draw_motion_label(labels)
-
-
-        # import pdb
-        # pdb.set_trace()
-        # if mode == 'loss': 
-        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-        # else:
-        #     return []
+        import pdb
+        pdb.set_trace()
+        if mode == 'loss': 
+            return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        else:
+            return []
         ################################ INPUT DEBUG (stop here)################################
 
         neck_features = []
@@ -302,4 +280,24 @@ class CorrelationModel(MVXTwoStageDetector):
                 # import pdb
                 # pdb.set_trace()
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
+            
+            if 'motion_pred' in predict_dict:
+                # real return value
+                seg_prediction, pred_consistent_instance_seg = predict_dict['motion_pred']
+            
+            ################################ SHOW MOTION RESULT ################################
+            if 'motion_feat' in single_head_feat_dict:
+                # fake visualization
+                motion_feat = single_head_feat_dict['motion_feat']
+                visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                visualizer.draw_motion_output(motion_feat, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True)
+
+            import pdb
+            pdb.set_trace()
+            if mode == 'loss': 
+                return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+            else:
+                return []
+            ################################ SHOW MOTION RESULT ################################
+
             return ret_list

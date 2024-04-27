@@ -7,7 +7,9 @@ from mmengine.dist import master_only
 import numpy as np
 import torch
 from torch import Tensor
-from .motion_visualization import plot_instance_map, visualise_output
+from .motion_visualization import plot_instance_map, visualise_output, plot_motion_prediction
+import os
+from PIL import Image
 
 @VISUALIZERS.register_module()
 class SimpleLocalVisualizer(Visualizer):
@@ -164,10 +166,6 @@ class SimpleLocalVisualizer(Visualizer):
         positions_voxel = np.round((positions - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 2
 
         super().draw_texts(texts, positions_voxel, **kwargs)
-
-    @master_only
-    def draw_bev_feat(self, feat: Tensor, **kwargs):
-        self.set_image(self.draw_featmap(feat, **kwargs))
     
     @master_only
     def draw_featmap(self, feat: Tensor, **kwargs):
@@ -175,22 +173,58 @@ class SimpleLocalVisualizer(Visualizer):
         if isinstance(feat, np.ndarray):
             feat = torch.tensor(feat)
         self.set_image(super().draw_featmap(feat, **kwargs))
-    
-    @master_only
-    def draw_instance_label(self, instance, ignore_index = 255, **kwargs):
-        check_type('instance', instance, (np.ndarray, torch.Tensor))
-        instance = tensor2ndarray(instance)
         
-        instance_ids = np.unique(instance)[1:].astype(np.int32)
-        instance_ids = instance_ids[instance_ids != ignore_index]
-        instance_map = dict(zip(instance_ids, instance_ids))
-        color_instance_i = plot_instance_map(instance, instance_map, **kwargs)
-        self.set_image(color_instance_i)
-    
     @master_only
-    def draw_motion_label(motion_label):
-        video = visualise_output(labels=motion_label, output=None)
-        # self.set_image(plot_motion_prediction(motion_label))
+    def draw_motion_label(self, motion_label, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True):
+        video = visualise_output(labels=motion_label, output=None, display_order=display_order)[0]
+        
+        gifs = []
+        for index in range(video.shape[0]):
+            image = video[index].transpose((1, 2, 0))
+            gifs.append(Image.fromarray(image))
+
+        os.makedirs(save_dir, exist_ok=True)
+        if gif:
+            gifs[0].save(f"{save_dir}/motion_label.gif", save_all=True, append_images=gifs[1:], duration=1000 / fps, loop=0)
+        else:
+            for idx, img in enumerate(gifs):
+                img.save(f"{save_dir}/motion_label_{idx}.png")
+        
+        # visualize BEV instance trajectory
+        segmentation_binary = motion_label['segmentation']
+        segmentation = segmentation_binary.new_zeros(
+            segmentation_binary.shape).repeat(1, 1, 2, 1, 1)
+        segmentation[:, :, 0] = (segmentation_binary[:, :, 0] == 0)
+        segmentation[:, :, 1] = (segmentation_binary[:, :, 0] == 1)
+        motion_label['segmentation'] = segmentation.float() * 10
+        motion_label['instance_center'] = motion_label['centerness']
+        motion_label['instance_offset'] = motion_label['offset']
+        motion_label['instance_flow'] = motion_label['flow']
+        figure_motion_label = plot_motion_prediction(motion_label)
+
+        figure_motion_label = Image.fromarray(figure_motion_label)
+        figure_motion_label.save(f"{save_dir}/motion_label_gt.png")
+
+    @master_only
+    def draw_motion_output(self, motion_output, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True):
+        video = visualise_output(labels=None, output=motion_output, display_order=display_order)[0]
+        
+        gifs = []
+        for index in range(video.shape[0]):
+            image = video[index].transpose((1, 2, 0))
+            gifs.append(Image.fromarray(image))
+
+        os.makedirs(save_dir, exist_ok=True)
+        if gif:
+            gifs[0].save(f"{save_dir}/motion_output.gif", save_all=True, append_images=gifs[1:], duration=1000 / fps, loop=0)
+        else:
+            for idx, img in enumerate(gifs):
+                img.save(f"{save_dir}/motion_output_{idx}.png")
+        
+        figure_motion_pred = plot_motion_prediction(motion_output)
+
+        figure_motion_pred = Image.fromarray(figure_motion_pred)
+        figure_motion_pred.save(f"{save_dir}/motion_output_pred.png")
 
     # @master_only
     def just_save(self, save_path: str = "./bev_points.png"):

@@ -114,11 +114,11 @@ class MTHead(BaseModule):
             else:
                 predict_dict['det_pred'] = self.det_head.predict_by_feat(multi_tasks_multi_feats, batch_input_metas) # type: ignore
 
-        # if 'motion_feat' in feat_dict and batch_input_metas != None:
-        #     multi_tasks_multi_feats = feat_dict['motion_feat']
-        #     # FIXME just one scale here
-        #     batch_result_instances = self.motion_head.predict_by_feat(multi_tasks_multi_feats, batch_input_metas) # type: ignore
-        #     predict_dict['motion_pred'] = batch_result_instances
+        if 'motion_feat' in feat_dict:
+            multi_tasks_multi_feats = feat_dict['motion_feat']
+            # FIXME just one scale here
+            batch_result_instances = self.motion_head.inference(multi_tasks_multi_feats) # type: ignore
+            predict_dict['motion_pred'] = batch_result_instances
 
         return predict_dict
 
