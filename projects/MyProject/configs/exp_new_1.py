@@ -27,9 +27,9 @@ motion_out_factor = 4
 
 pad_delay = False
 det_with_velocity = True
-code_size = 10
+code_size = 9
 # code_size = 7
-code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2, 0.2]#wyc改
+code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]#wyc改
 # code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 det_tasks = [
     dict(num_class=1, class_names=['car']),
@@ -43,7 +43,7 @@ det_common_heads = dict(
     dim=(3, 2),
     rot=(2, 2),
     vel=(2, 2),
-    corr=(1, 2) #wyc改
+    # corr=(1, 2) #wyc改
 )
 
 # train params
@@ -422,6 +422,19 @@ model = dict(
             },
             sample_ignore_mode='past_valid',
             posterior_with_label=False,
+        ),
+        corr_head=dict(
+            type='CorrGenerate',
+            in_channels=sum([128, 128, 128]),
+            loss_corr=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
+            separate_head=dict(
+                type='SeparateHead',
+                head_conv=64,
+                init_bias=-2.19,
+                final_kernel=3
+            ),
+            share_conv_channel=64,
+            num_heatmap_convs=2,
         ),
     ),
     pts_train_cfg=dict(

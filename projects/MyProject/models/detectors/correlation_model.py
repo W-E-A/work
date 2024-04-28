@@ -168,15 +168,15 @@ class CorrelationModel(MVXTwoStageDetector):
         ego_motion_label = present_seq[self.ego_id]['ego_motion_label']
 
         ################################ INPUT DEBUG (stop here)################################
-        assert batch_size == 1
-        scene_info_0.pop('pose_matrix')
-        scene_info_0.pop('future_motion_matrix')
-        scene_info_0.pop('loc_matrix')
-        scene_info_0.pop('future_motion_rela_matrix')
-        log(scene_info_0)
-        sample_idx = scene_info_0.sample_idx
+        # assert batch_size == 1
+        # scene_info_0.pop('pose_matrix')
+        # scene_info_0.pop('future_motion_matrix')
+        # scene_info_0.pop('loc_matrix')
+        # scene_info_0.pop('future_motion_rela_matrix')
+        # log(scene_info_0)
+        # sample_idx = scene_info_0.sample_idx
 
-        visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+        # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
         
         visualizer.set_points(present_seq[self.inf_id]['inputs']['points'][0].cpu().numpy())
         os.makedirs(f'./data/motion/{sample_idx}', exist_ok=True)
@@ -200,12 +200,12 @@ class CorrelationModel(MVXTwoStageDetector):
 
         # visualizer.draw_motion_label(ego_motion_trans_label, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='ego')
 
-        import pdb
-        pdb.set_trace()
-        if mode == 'loss': 
-            return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-        else:
-            return []
+        # import pdb
+        # pdb.set_trace()
+        # if mode == 'loss': 
+        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        # else:
+        #     return []
         ################################ INPUT DEBUG (stop here)################################
 
         neck_features = []
@@ -240,7 +240,7 @@ class CorrelationModel(MVXTwoStageDetector):
             # infrastructure input B, C, H, W（b, 384, 256, 256 single frame）
             single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id], motion_label) # out from dethead and motionhead
 
-            heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(ins_list[self.inf_id]) # B
+            gt_corrs, heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(ins_list[self.inf_id]) # B
             single_det_gt = {
                 'heatmaps':heatmaps,
                 'anno_boxes':anno_boxes,
@@ -250,6 +250,7 @@ class CorrelationModel(MVXTwoStageDetector):
             single_det_loss_dict = self.multi_task_head.loss(single_head_feat_dict,
                                                 det_gt = single_det_gt,
                                                 motion_gt = None,
+                                                corr_gt = gt_corrs,
                                                 gather_task_loss = False) # FIXME
             return single_det_loss_dict
         else:

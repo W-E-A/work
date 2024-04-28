@@ -22,6 +22,7 @@ class MTHead(BaseModule):
             self,
             det_head: Optional[dict] = None,
             motion_head:Optional[dict] = None,
+            corr_head:Optional[dict] = None,
             train_cfg: Optional[dict] = None,
             test_cfg: Optional[dict] = None,
             init_cfg: Union[dict, List[dict], None] = None,
@@ -41,6 +42,9 @@ class MTHead(BaseModule):
             motion_head.update(train_cfg=self.train_cfg)
             motion_head.update(test_cfg=self.test_cfg)
             self.motion_head = MODELS.build(motion_head)
+        self.corr_head = None
+        if corr_head:
+            self.corr_head = MODELS.build(corr_head)
 
     def forward(self, feats: Union[Tensor, List[Tensor]], targets: Optional[dict] = None) -> dict:
         return_dict = {}
@@ -52,6 +56,9 @@ class MTHead(BaseModule):
         if self.motion_head:
             multi_tasks_multi_feats: Tuple[List[Tensor]] = self.motion_head(feats, targets)
             return_dict['motion_feat'] = multi_tasks_multi_feats
+        if self.corr_head:
+            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.corr_head(feats)
+            return_dict['corr_feat'] = multi_tasks_multi_feats
 
         return return_dict
 
@@ -59,6 +66,7 @@ class MTHead(BaseModule):
              feat_dict: dict,
              det_gt: Optional[dict] = None,
              motion_gt: Optional[dict] = None,
+             corr_gt: Optional[dict] = None,
              gather_task_loss: bool = False
              ) -> dict:
 
@@ -84,6 +92,21 @@ class MTHead(BaseModule):
             multi_tasks_multi_feats = feat_dict['motion_feat']
             # FIXME just one scale here
             temp_dict = self.motion_head.loss(multi_tasks_multi_feats) # type: ignore
+            if gather_task_loss:
+                gather_dict = {}
+                for key in temp_dict.keys():
+                    if 'loss' in key:
+                        cut_key = key.split('.')[-1]
+                        if cut_key not in gather_dict:
+                            gather_dict[cut_key] = []
+                        gather_dict[cut_key].append(temp_dict[key])
+                loss_dict.update(gather_dict)
+            else:
+                loss_dict.update(temp_dict)
+        if 'corr_feat' in feat_dict :
+            multi_tasks_multi_feats = feat_dict['corr_feat']
+            # FIXME just one scale here
+            temp_dict = self.corr_head.loss(multi_tasks_multi_feats, corr_gt) # type: ignore
             if gather_task_loss:
                 gather_dict = {}
                 for key in temp_dict.keys():
@@ -199,8 +222,12 @@ class CenterHeadModified(BaseModule):
         # self.with_velocity = with_velocity
         if 'vel' in common_heads.keys():
             self.with_velocity = True
+        else:
+            self.with_velocity = False
         if 'corr' in common_heads.keys():
             self.with_correlation = True
+        else:
+            self.with_correlation = False
 
         if self.train_cfg:
             self.max_objs = int(self.train_cfg['max_objs'] * self.train_cfg['dense_reg'])
@@ -388,8 +415,11 @@ class CenterHeadModified(BaseModule):
         """
         task - tensor[b, anyshape] align with prediction format
         """
-        heatmaps, anno_boxes, inds, masks = multi_apply(
+        corr_gts, heatmaps, anno_boxes, inds, masks = multi_apply(
             self.get_targets_single, batch_gt_instances_3d)
+        # import pdb;pdb.set_trace()
+        corr_gts = list(map(list, zip(*corr_gts)))
+        corr_gts = [torch.stack(corr_) for corr_ in corr_gts]
         # Transpose heatmaps
         heatmaps = list(map(list, zip(*heatmaps)))
         heatmaps = [torch.stack(hms_) for hms_ in heatmaps]
@@ -402,7 +432,7 @@ class CenterHeadModified(BaseModule):
         # Transpose inds
         masks = list(map(list, zip(*masks)))
         masks = [torch.stack(masks_) for masks_ in masks]
-        return heatmaps, anno_boxes, inds, masks # type: ignore
+        return corr_gts, heatmaps, anno_boxes, inds, masks # type: ignore
 
     def get_targets_single(self,
                            gt_instances_3d: InstanceData) -> Tuple[Tensor]:
@@ -567,7 +597,7 @@ class CenterHeadModified(BaseModule):
                                 corr.unsqueeze(0)
                             ])
                         else:
-                            vx, vy = task_boxes[idx][k][7:]
+                            vx, vy = task_boxes[idx][k][7:9]
                             rot = task_boxes[idx][k][6]
                             box_dim = task_boxes[idx][k][3:6]
                             if self.norm_bbox:
@@ -596,7 +626,59 @@ class CenterHeadModified(BaseModule):
             anno_boxes.append(anno_box)
             masks.append(mask)
             inds.append(ind)
-        return heatmaps, anno_boxes, inds, masks # type: ignore
+        #gt_corr_heatmap生成
+        num_objs = min(gt_bboxes_3d.shape[0], self.max_objs)
+        num_corr_pos = torch.tensor([gt_bboxes_3d[:,9].gt(0.3).float().sum().item()])
+        gt_corr_heatmap = gt_bboxes_3d.new_zeros((
+            1,
+            self.feature_map_size[0].item(),
+            self.feature_map_size[1].item()
+        )) # type: ignore
+        for k in range(num_objs):
+            length = gt_bboxes_3d[k][3]
+            width = gt_bboxes_3d[k][4]
+            length = length / self.voxel_size[0] / self.out_size_factor
+            width = width / self.voxel_size[1] / self.out_size_factor
+            if width > 0 and length > 0:
+                radius = gaussian_radius(
+                    (width, length),
+                    min_overlap=self.gaussian_overlap)
+                radius = max(self.min_radius, int(radius))
+
+                rela_radius = gaussian_radius(
+                    (width, length),
+                    min_overlap=self.rela_gaussian_overlap)
+                rela_radius = max(self.min_radius, int(rela_radius))
+
+                # be really careful for the coordinate system of
+                # your box annotation.
+                x, y, z = gt_bboxes_3d[k][0], gt_bboxes_3d[k][1], gt_bboxes_3d[k][2]
+
+                coor_x = (
+                    x - self.pc_range[0]
+                ) / self.voxel_size[0] / self.out_size_factor
+                coor_y = (
+                    y - self.pc_range[1]
+                ) / self.voxel_size[1] / self.out_size_factor
+                center = torch.tensor([coor_x, coor_y],
+                                        dtype=torch.float32,
+                                        device=device)
+                center_int = center.to(torch.int32)
+
+                # throw out not in range objects to avoid out of array
+                # area when creating the heatmap
+                if not (0 <= center_int[0] < self.feature_map_size[1] and 0 <= center_int[1] < self.feature_map_size[0]):
+                    continue
+
+                draw_gaussian(gt_corr_heatmap[0], center_int, radius, k=gt_bboxes_3d[k][9])  ###后续需要修改
+                # import pdb;pdb.set_trace()
+                # draw_gaussian(gt_corr_heatmap, center_int, radius)  ###后续需要修改
+
+                x, y = center_int[0], center_int[1]
+                assert (y * self.feature_map_size[1] + x <
+                        self.feature_map_size[1] * self.feature_map_size[0])
+        
+        return [gt_corr_heatmap, num_corr_pos], heatmaps, anno_boxes, inds, masks # type: ignore
 
     def loss_by_feat(self,
                      preds_dicts: Tuple[List[dict]],
@@ -881,3 +963,66 @@ class CenterHeadModified(BaseModule):
 
             predictions_dicts.append(predictions_dict)
         return predictions_dicts
+
+@MODELS.register_module()
+class CorrGenerate(BaseModule):
+    def __init__(
+        self,
+        in_channels: Union[List[int], int] = [128],
+        loss_corr: dict = dict(
+                    type='mmdet.GaussianFocalLoss', reduction='mean'),
+        separate_head: dict = dict(
+                     type='mmdet.SeparateHead',
+                     init_bias=-2.19,
+                     final_kernel=3),
+        share_conv_channel: int = 64,
+        num_heatmap_convs: int = 2,
+        conv_cfg: dict = dict(type='Conv2d'),
+        norm_cfg: dict = dict(type='BN2d'),
+        bias: str = 'auto',
+        init_cfg: Union[dict, List[dict], None] = None,
+        ):
+        super().__init__(init_cfg=init_cfg)
+
+        self.in_channels = in_channels
+        self.loss_corr = MODELS.build(loss_corr)
+
+        self.shared_conv = ConvModule(
+            in_channels, # type: ignore
+            share_conv_channel,
+            kernel_size=3,
+            padding=1,
+            conv_cfg=conv_cfg,
+            norm_cfg=norm_cfg,
+            bias=bias)
+        
+        heads = dict(corr_heatmap=(1, num_heatmap_convs))
+        separate_head.update(
+                in_channels=share_conv_channel, heads=heads, num_cls=1)
+        self.corr_head = MODELS.build(separate_head)
+
+    def forward(self, feats: Union[List[Tensor], Tensor]) -> Tuple[List[Tensor]]:
+        """
+        [X C H W]
+        """
+        ret_list = []
+        feats = self.shared_conv(feats[0])
+        ret_list.append(self.corr_head(feats))
+        return ret_list
+
+    def loss(self, pred_result, gt_corr=None):
+        # import pdb;pdb.set_trace()
+        pred_result = pred_result[0]
+        gt_corr_heatmap = gt_corr[0]
+        num_pos = gt_corr[1].sum()
+        loss_dict = dict()
+        pred_result['corr_heatmap'] = clip_sigmoid(pred_result['corr_heatmap'])
+        # num_pos = gt_corr_heatmap.gt(0.3).float().sum().item() #之后需要调整阈值
+        loss_heatmap = self.loss_corr(
+            pred_result['corr_heatmap'], # B c H W
+            gt_corr_heatmap, # type: ignore  B c H W
+            avg_factor=max(num_pos, 1))
+        loss_dict[f'loss_corr_heatmap'] = loss_heatmap
+        return loss_dict
+        
+
