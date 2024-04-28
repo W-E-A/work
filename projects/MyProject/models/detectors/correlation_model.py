@@ -164,6 +164,8 @@ class CorrelationModel(MVXTwoStageDetector):
         del example_seq
 
         motion_label = present_seq[self.inf_id]['motion_label'] # infrastructure FIXME
+        # eegg_label = present_seq[self.ego_id]['motion_label']
+        ego_motion_label = present_seq[self.ego_id]['ego_motion_label']
 
         ################################ INPUT DEBUG (stop here)################################
         assert batch_size == 1
@@ -181,8 +183,22 @@ class CorrelationModel(MVXTwoStageDetector):
         visualizer.just_save(f'./data/motion/{sample_idx}/lidar_bev.png')
         visualizer.clean()
 
+        # center = torch.stack(motion_label['instance_centerness'])[0, 0]
+        # visualizer.draw_featmap(center)
+        # visualizer.just_save(f'./data/motion/{sample_idx}/center_0.png')
+        # visualizer.clean()
+
         labels, _ = self.multi_task_head.motion_head.prepare_future_labels(motion_label)
-        visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True)
+        visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='infrastructure')
+
+        # labels, _ = self.multi_task_head.motion_head.prepare_future_labels(eegg_label)
+        # visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='eegg')
+
+        labels, _ = self.multi_task_head.motion_head.prepare_future_labels(ego_motion_label)
+        import pdb;pdb.set_trace()
+        visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='ego')
+
+        # visualizer.draw_motion_label(ego_motion_trans_label, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='ego')
 
         import pdb
         pdb.set_trace()

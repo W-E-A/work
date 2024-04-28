@@ -141,6 +141,7 @@ class FeatureWarper(object):
         """
         follow: P_A = T_{AB}P_B
         """
+
         if flow.shape[-1] == 6:
             flow = vec2mat(flow)
         
@@ -159,6 +160,15 @@ class FeatureWarper(object):
         )
 
         return out
+
+    def cumulative_warp_features_batch(self, x, flow, mode='nearest', bev_transform=None):
+        """
+        follow: P_A = T_{AB}P_B
+        """
+        out = []
+        for i in range(x.shape[1]):
+            out.append(self.cumulative_warp_features_single(x[:, i], flow[:, i]))
+        return torch.stack(out, 1)
 
     def cumulative_warp_features_v2x(self, x, flow, mode='nearest', bev_transform=None):
         """

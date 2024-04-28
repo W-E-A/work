@@ -76,12 +76,15 @@ def convert_instance_mask_to_center_and_offset_label(
                     delta_y = warped_yc - prev_yc # 当前中心点对于上一帧的所有点的偏移y
                     future_displacement_label[t - 1, 0, prev_mask] = delta_x # 构造上一帧的flow标签
                     future_displacement_label[t - 1, 1, prev_mask] = delta_y
-
+                
+                if t == seq_len - 1:
+                    future_displacement_label[t, 0, instance_mask] = 0.0 # 最后一帧未来的flow没有就认为和上一帧的一致
+                    future_displacement_label[t, 1, instance_mask] = 0.0 # 最后一帧未来的flow没有就认为和上一帧的一致
             prev_xc = xc
             prev_yc = yc
             prev_mask = instance_mask
 
-    return center_label, offset_label, future_displacement_label
+    return center_label, offset_label, future_displacement_label # 中心度，中心到每个实例周围点的偏移距离，当前帧下一帧中心点到当前帧每个实例的偏移距离
 
 
 def find_instance_centers(center_prediction: torch.Tensor, conf_threshold: float = 0.1, nms_kernel_size: float = 3):
@@ -212,10 +215,16 @@ def make_instance_id_temporally_consistent(pred_inst, future_flow, matching_thre
     device = pred_inst.device
     for t in range(seq_len - 1):
         # Compute predicted future instance means
-        grid = torch.stack(torch.meshgrid(
-            torch.arange(h, dtype=torch.float, device=device), torch.arange(
-                w, dtype=torch.float, device=device), indexing='ij',
-        ))
+        # grid = torch.stack(torch.meshgrid(
+        #     torch.arange(h, dtype=torch.float, device=device), torch.arange(
+        #         w, dtype=torch.float, device=device), indexing='ij',
+        # ))
+        grid_x, grid_y = torch.meshgrid(
+            torch.arange(h, dtype=torch.float, device=device),
+            torch.arange(w, dtype=torch.float, device=device)
+        )
+        grid = torch.stack((grid_x.transpose(1,0), grid_y.transpose(1,0)), dim=0)
+        # import pdb;pdb.set_trace()
 
         # Add future flow
         grid = grid + future_flow[0, t]
@@ -244,7 +253,7 @@ def make_instance_id_temporally_consistent(pred_inst, future_flow, matching_thre
             torch.arange(h, dtype=torch.float, device=device),
             torch.arange(w, dtype=torch.float, device=device)
         )
-        grid = torch.stack((grid_x.transpose(1,0), grid_y.transpose(1,0)), dim=2)
+        grid = torch.stack((grid_x.transpose(1,0), grid_y.transpose(1,0)), dim=0)
         n_instances = int(pred_inst[0, t + 1].max().item())
 
         if n_instances == 0:
@@ -304,7 +313,7 @@ def predict_instance_segmentation_and_trajectories(
     make_consistent=True,
     vehicles_id=1,
 ):
-    preds = output['segmentation'].detach()
+    preds = output['segmentation'].detach() # B, len, 2, H, W
     preds = torch.argmax(preds, dim=2, keepdims=True)
     foreground_masks = preds.squeeze(2) == vehicles_id # B, len, H, W
 
@@ -331,10 +340,10 @@ def predict_instance_segmentation_and_trajectories(
         consistent_instance_seg = []
         for b in range(batch_size):
             consistent_instance_seg.append(
-                make_instance_id_temporally_consistent(pred_inst[b:b+1],
-                                                       output['instance_flow'][b:b+1].detach())
+                make_instance_id_temporally_consistent(pred_inst[b:b+1], # 1 len h w
+                                                       output['instance_flow'][b:b+1].detach()) # 1 len 2 h w
             )
-        consistent_instance_seg = torch.cat(consistent_instance_seg, dim=0)
+        consistent_instance_seg = torch.cat(consistent_instance_seg, dim=0) # B, len, h, w
     else:
         consistent_instance_seg = pred_inst
 
@@ -343,11 +352,16 @@ def predict_instance_segmentation_and_trajectories(
         # Generate trajectories
         matched_centers = {}
         _, seq_len, h, w = consistent_instance_seg.shape
-        grid = torch.stack(torch.meshgrid(
+        # grid = torch.stack(torch.meshgrid(
+        #     torch.arange(h, dtype=torch.float, device=preds.device),
+        #     torch.arange(w, dtype=torch.float, device=preds.device),
+        #     indexing='ij',
+        # ))
+        grid_x, grid_y = torch.meshgrid(
             torch.arange(h, dtype=torch.float, device=preds.device),
-            torch.arange(w, dtype=torch.float, device=preds.device),
-            indexing='ij',
-        ))
+            torch.arange(w, dtype=torch.float, device=preds.device)
+        )
+        grid = torch.stack((grid_x.transpose(1,0), grid_y.transpose(1,0)), dim=0)
 
         for instance_id in torch.unique(consistent_instance_seg[0, 0])[1:].cpu().numpy():
             for t in range(seq_len):
@@ -358,6 +372,8 @@ def predict_instance_segmentation_and_trajectories(
 
         for key, value in matched_centers.items():
             matched_centers[key] = torch.stack(value).cpu().numpy()[:, ::-1]
+            print(f"{key} : {len(value)}")
+        import pdb;pdb.set_trace()
 
         return consistent_instance_seg, matched_centers
 

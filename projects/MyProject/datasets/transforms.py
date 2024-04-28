@@ -427,10 +427,13 @@ class MakeMotionLabels(BaseTransform):
         example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
         future_seq_position = range(seq_length)[present_idx:] # 取出未来帧在序列中的位置， 比如3, 4, 5
         future_length = len(future_seq_position) # 表明未来帧的长度，比如3
-        # future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
+        future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
         # future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
         # future_loc_matrix = input_dict['loc_matrix'][present_idx:, :, ...] # c x 4 4 # 未来帧ego的实际位置
         future_motion_rela_matrix = input_dict['future_motion_rela_matrix'] # c x 4 4 未来帧对于前一帧的位姿关系
+
+        inf_idx = co_agents.index('infrastructure')
+        inf_motion_rela_matrix = future_motion_rela_matrix[inf_idx]
 
         for j, agent in enumerate(co_agents):
             
@@ -496,6 +499,62 @@ class MakeMotionLabels(BaseTransform):
                 'future_egomotion': torch.from_numpy(future_motion_rela_matrix[j]) # len, 4, 4 ident at 0
             }
             input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
+
+            if agent != 'infrastructure':
+                ego_segmentations = []
+                ego_instances = []
+                for i, timestamp in enumerate(future_seq_position):
+                    gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
+                    ego_mask = gt_instances_3d.track_id == self.ego_id
+                    gt_instances_3d = gt_instances_3d[ego_mask]
+                    assert len(gt_instances_3d) == 1 # ego only, must construct the ego bbox
+
+                    if gt_instances_3d.bboxes_3d is None:
+                        segmentation = np.ones(
+                            (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
+                        instance = np.ones_like(segmentation) * self.ignore_index
+                    else:
+                        segmentation = np.zeros((self.grid_size[0], self.grid_size[1])) # H, W
+                        instance = np.zeros_like(segmentation)
+
+                    trans = future_pose_matrix[i, inf_idx, j, ...] # 4, 4
+                    gt_instances_3d.bboxes_3d.rotate(trans[:3, :3].T, None)
+                    gt_instances_3d.bboxes_3d.translate(trans[:3, 3])
+                    bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
+                    bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
+
+                    poly_region = bbox_corners_voxel[0]
+                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
+                    cv2.fillPoly(instance, [poly_region], 1) # ego only so 1
+                        
+                    ego_segmentations.append(segmentation)
+                    ego_instances.append(instance)
+
+                ego_segmentations = np.stack(ego_segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
+                ego_instances = np.stack(ego_instances, axis=0).astype(np.int32) # [fu_len, H, W]
+                
+                ego_instance_centerness, ego_instance_offset, ego_instance_flow = convert_instance_mask_to_center_and_offset_label(
+                    ego_instances,
+                    inf_motion_rela_matrix,
+                    1, # ego only
+                    ignore_index = self.ignore_index,
+                    spatial_extent = self.warp_size,
+                ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
+
+                # 如果分割有任何是没有box的则清除中心度为ignore
+                invalid_mask = (ego_segmentations[:, 0, 0] == self.ignore_index)
+                ego_instance_centerness[invalid_mask] = self.ignore_index
+                ego_motion_label = {
+                    'motion_segmentation': torch.from_numpy(ego_segmentations).float(), # [fu_len, H, W]
+                    'motion_instance': torch.from_numpy(ego_instances).float(), # [fu_len, H, W]
+                    'instance_centerness': torch.from_numpy(ego_instance_centerness).float(), # len, 1, h, w
+                    'instance_offset': torch.from_numpy(ego_instance_offset).float(), # len, 2, h, w
+                    'instance_flow': torch.from_numpy(ego_instance_flow).float(), # len, 2, h, w invalid at last
+                    'future_egomotion': torch.from_numpy(inf_motion_rela_matrix), # len, 4, 4 ident at 0
+                    # 'future_pose_matrix': torch.from_numpy(future_pose_matrix[:, inf_idx, j, ...]) # len, 4, 4 ego to infrastructure
+                }
+                input_dict['example_seq'][present_idx][j]['ego_motion_label'] = ego_motion_label
+                # print(input_dict['example_seq'][present_idx][j].keys())
         return input_dict
 
 

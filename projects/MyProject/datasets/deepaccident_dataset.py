@@ -80,7 +80,7 @@ class DeepAccident_V2X_Dataset(Det3DDataset):
         # for index in range(len(self)):
         #     print(f"sample : {index}")
         #     dt = self.prepare_data(index)
-        #     assert len(dt['example_seq'][2][1]['inputs']) > 0
+        #     # assert len(dt['example_seq'][2][1]['inputs']) > 0
         # import pdb
         # pdb.set_trace()
 

@@ -48,7 +48,7 @@ det_common_heads = dict(
 
 # train params
 train_batch_size = 1
-train_num_workers = 4
+train_num_workers = 1
 train_seq_length = 8
 train_present_idx = 2
 train_key_interval = 1
@@ -167,7 +167,7 @@ train_scene_pipline = [
         pc_range = motion_range,
         voxel_size = motion_voxel_size,
         ego_id = -100,
-        only_vehicle = False,
+        only_vehicle = True,
         vehicle_id_list = [0, 1, 2],
         filter_invalid = True,
         ignore_index = 255,

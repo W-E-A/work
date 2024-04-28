@@ -399,9 +399,10 @@ def plot_motion_prediction(motion_preds):
 
     trajectory_img = np.zeros(vis_image.shape, dtype=np.uint8)
     for instance_id in unique_ids:
-        path = matched_centers[instance_id]
+        path = matched_centers[instance_id].astype(np.uint8)
         for t in range(len(path) - 1):
             color = instance_colours[instance_id].tolist()
+            # import pdb;pdb.set_trace()
             cv2.line(trajectory_img, tuple(
                 path[t]), tuple(path[t + 1]), color, 4)
 
