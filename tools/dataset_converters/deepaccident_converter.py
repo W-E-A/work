@@ -216,9 +216,9 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
         scene_data_list = list(pool.starmap(_process_target_items, [(target_items_subset, data_path, load_anno, sample_interval, pos, num_threads) for pos, target_items_subset in enumerate(target_items_split)]))
 
     from collections import ChainMap
-    scene_data = ChainMap(*scene_data_list)
+    scene_data = dict(ChainMap(*scene_data_list))
 
-    for scene_name, agent_data_dict in mmengine.track_iter_progress(scene_data.items()): # 用多线程跑
+    for scene_name, agent_data_dict in tqdm(scene_data.items(), desc=f"generate velocity data...", leave=False): # 用多线程跑
         for agent in agent_names:
             if len(agent_data_dict[agent]) <= 0:
                 print(f"{scene_name} -> {agent} seq empty, skip it!!!")

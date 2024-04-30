@@ -2,6 +2,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 from mmdet3d.registry import MODELS
 from mmdet3d.models import Det3DDataPreprocessor
 
+
 @MODELS.register_module()
 class DeepAccidentDataPreprocessor(Det3DDataPreprocessor):
     def __init__(self, *args, **kwargs):

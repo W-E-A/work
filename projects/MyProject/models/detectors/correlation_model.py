@@ -6,10 +6,9 @@ import torch
 from torch import Tensor
 from mmengine.logging import print_log
 import logging
-from ...visualization import SimpleLocalVisualizer
 from mmdet3d.structures import Det3DDataSample
 import os
-from ...utils import FeatureWarper
+from ...visualization import SimpleLocalVisualizer
 
 
 def log(msg = "" ,level: int = logging.INFO):
@@ -28,7 +27,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 #  test_comm_expand_layer: Optional[dict] = None,
                  pts_train_cfg: Optional[dict] = None,
                  pts_test_cfg: Optional[dict] = None,
-                 pts_fusion_cfg: Optional[dict] = None,
+                #  pts_fusion_cfg: Optional[dict] = None,
                  init_cfg: Optional[dict] = None,
                  data_preprocessor: Optional[dict] = None):
         super(CorrelationModel, self).__init__(
@@ -42,7 +41,7 @@ class CorrelationModel(MVXTwoStageDetector):
         
         self.pts_train_cfg = pts_train_cfg
         self.pts_test_cfg = pts_test_cfg
-        self.pts_fusion_cfg = pts_fusion_cfg
+        # self.pts_fusion_cfg = pts_fusion_cfg
         
         if multi_task_head:
             multi_task_head.update(train_cfg = pts_train_cfg)
@@ -59,9 +58,9 @@ class CorrelationModel(MVXTwoStageDetector):
         #     self.score_threshold = self.pts_test_cfg.get('score_threshold', 0.1)
         #     assert self.test_mode in ('full', 'where2comm', 'new_method', 'single')
 
-        if self.pts_fusion_cfg:
-            self.pc_range = self.pts_fusion_cfg.get('pc_range', None)
-            self.warper = FeatureWarper(self.pc_range)
+        # if self.pts_fusion_cfg:
+        #     self.corr_pc_range = self.pts_fusion_cfg.get('corr_pc_range', None)
+        #     self.warper = FeatureWarper(self.corr_pc_range)
 
 
     def extract_pts_feat(
@@ -161,11 +160,9 @@ class CorrelationModel(MVXTwoStageDetector):
         self.ego_id = co_agents.index('ego_vehicle') # FIXME
         self.inf_id = co_agents.index('infrastructure') # FIXME
         present_seq = example_seq[present_idx]
-        del example_seq
 
-        motion_label = present_seq[self.inf_id]['motion_label'] # infrastructure FIXME
-        # eegg_label = present_seq[self.ego_id]['motion_label']
-        ego_motion_label = present_seq[self.ego_id]['ego_motion_label']
+        infrastructure_label = present_seq[self.inf_id]['motion_label'] # infrastructure FIXME
+        ego_motion_label = present_seq[self.ego_id]['ego_motion_label'] # ego FIXME
 
         ################################ INPUT DEBUG (stop here)################################
         # assert batch_size == 1
@@ -178,27 +175,25 @@ class CorrelationModel(MVXTwoStageDetector):
 
         # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
         
-        visualizer.set_points(present_seq[self.inf_id]['inputs']['points'][0].cpu().numpy())
-        os.makedirs(f'./data/motion/{sample_idx}', exist_ok=True)
-        visualizer.just_save(f'./data/motion/{sample_idx}/lidar_bev.png')
-        visualizer.clean()
-
-        # center = torch.stack(motion_label['instance_centerness'])[0, 0]
-        # visualizer.draw_featmap(center)
-        # visualizer.just_save(f'./data/motion/{sample_idx}/center_0.png')
+        # visualizer.set_points(present_seq[self.inf_id]['inputs']['points'][0].cpu().numpy())
+        # os.makedirs(f'./data/motion/{sample_idx}', exist_ok=True)
+        # visualizer.just_save(f'./data/motion/{sample_idx}/lidar_bev.png')
         # visualizer.clean()
 
-        labels, _ = self.multi_task_head.motion_head.prepare_future_labels(motion_label)
-        visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='infrastructure')
+        # # # center = torch.stack(infrastructure_label['instance_centerness'])[0, 0]
+        # # # visualizer.draw_featmap(center)
+        # # # visualizer.just_save(f'./data/motion/{sample_idx}/center_0.png')
+        # # # visualizer.clean()
 
-        # labels, _ = self.multi_task_head.motion_head.prepare_future_labels(eegg_label)
-        # visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='eegg')
+        # labels, _ = self.multi_task_head.motion_head.prepare_future_labels(infrastructure_label)
+        # visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='infrastructure')
 
-        labels, _ = self.multi_task_head.motion_head.prepare_future_labels(ego_motion_label)
-        import pdb;pdb.set_trace()
-        visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='ego')
+        # # # ego_label = present_seq[self.ego_id]['motion_label']
+        # # # labels, _ = self.multi_task_head.motion_head.prepare_future_labels(ego_label)
+        # # # visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='ego')
 
-        # visualizer.draw_motion_label(ego_motion_trans_label, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='ego')
+        # labels, _ = self.multi_task_head.corr_head.prepare_ego_labels(ego_motion_label)
+        # visualizer.draw_motion_label(labels, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='ego_motion')
 
         # import pdb
         # pdb.set_trace()
@@ -238,9 +233,14 @@ class CorrelationModel(MVXTwoStageDetector):
         
         if mode == 'loss':
             # infrastructure input B, C, H, W（b, 384, 256, 256 single frame）
-            single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id], motion_label) # out from dethead and motionhead
+            single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id], motion_targets = infrastructure_label, ego_motion = ego_motion_label) # out from dethead and motionhead
 
             gt_corrs, heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(ins_list[self.inf_id]) # B
+
+            ################################ SHOW CORR HEATMAP################################
+
+            ################################ SHOW CORR HEATMAP################################
+
             single_det_gt = {
                 'heatmaps':heatmaps,
                 'anno_boxes':anno_boxes,
@@ -252,6 +252,7 @@ class CorrelationModel(MVXTwoStageDetector):
                                                 motion_gt = None,
                                                 corr_gt = gt_corrs,
                                                 gather_task_loss = False) # FIXME
+
             return single_det_loss_dict
         else:
             single_head_feat_dict = self.multi_task_head(neck_features[self.inf_id]) # out from dethead and motionhead # FIXME only forward ego feature

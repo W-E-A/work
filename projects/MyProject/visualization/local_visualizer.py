@@ -7,13 +7,10 @@ from mmengine.dist import master_only
 import numpy as np
 import torch
 from torch import Tensor
-from .motion_visualization import plot_instance_map, visualise_output, plot_motion_prediction
 import os
 from PIL import Image
+from .motion_visualization import plot_instance_map, visualise_output, plot_motion_prediction
 
-def flip_image(image):
-    pil_img = image.transpose(Image.FLIP_TOP_BOTTOM)
-    return pil_img
 
 @VISUALIZERS.register_module()
 class SimpleLocalVisualizer(Visualizer):
@@ -185,7 +182,7 @@ class SimpleLocalVisualizer(Visualizer):
         gifs = []
         for index in range(video.shape[0]):
             image = video[index].transpose((1, 2, 0))
-            gifs.append(flip_image(Image.fromarray(image)))
+            gifs.append(Image.fromarray(image).transpose(Image.FLIP_TOP_BOTTOM))
 
         os.makedirs(save_dir, exist_ok=True)
         if gif:
@@ -195,19 +192,19 @@ class SimpleLocalVisualizer(Visualizer):
                 img.save(f"{save_dir}/{prefix}_motion_label_{idx}.png")
         
         # visualize BEV instance trajectory
-        # segmentation_binary = motion_label['segmentation']
-        # segmentation = segmentation_binary.new_zeros(
-        #     segmentation_binary.shape).repeat(1, 1, 2, 1, 1)
-        # segmentation[:, :, 0] = (segmentation_binary[:, :, 0] == 0)
-        # segmentation[:, :, 1] = (segmentation_binary[:, :, 0] == 1)
-        # motion_label['segmentation'] = segmentation.float() * 10 # B, len, 2, h, w 用10区分0和10
-        # motion_label['instance_center'] = motion_label['centerness'] # B, len, 1, h, w
-        # motion_label['instance_offset'] = motion_label['offset'] # B, len, 2, h, w
-        # motion_label['instance_flow'] = motion_label['flow'] # B, len, 2, h, w
-        # figure_motion_label = plot_motion_prediction(motion_label)
+        segmentation_binary = motion_label['segmentation']
+        segmentation = segmentation_binary.new_zeros(
+            segmentation_binary.shape).repeat(1, 1, 2, 1, 1)
+        segmentation[:, :, 0] = (segmentation_binary[:, :, 0] == 0)
+        segmentation[:, :, 1] = (segmentation_binary[:, :, 0] == 1)
+        motion_label['segmentation'] = segmentation.float() * 10 # B, len, 2, h, w 用10区分0和10
+        motion_label['instance_center'] = motion_label['centerness'] # B, len, 1, h, w
+        motion_label['instance_offset'] = motion_label['offset'] # B, len, 2, h, w
+        motion_label['instance_flow'] = motion_label['flow'] # B, len, 2, h, w
+        figure_motion_label = plot_motion_prediction(motion_label)
 
-        # figure_motion_label = Image.fromarray(figure_motion_label)
-        # figure_motion_label.save(f"{save_dir}/{prefix}_motion_label_gt.png")
+        figure_motion_label = Image.fromarray(figure_motion_label)
+        figure_motion_label.save(f"{save_dir}/{prefix}_motion_label_gt.png")
 
     @master_only
     def draw_motion_output(self, motion_output, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True):
@@ -230,7 +227,7 @@ class SimpleLocalVisualizer(Visualizer):
         figure_motion_pred = Image.fromarray(figure_motion_pred)
         figure_motion_pred.save(f"{save_dir}/motion_output_pred.png")
 
-    # @master_only
+    @master_only
     def just_save(self, save_path: str = "./bev_points.png"):
         self.fig_save.savefig(save_path, bbox_inches='tight', pad_inches=0) # type: ignore
 

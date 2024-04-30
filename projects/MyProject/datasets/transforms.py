@@ -1,31 +1,26 @@
 from typing import List, Optional, Union,  Dict, Tuple
+import numpy as np
 from numpy import ndarray
 from mmdet3d.registry import TRANSFORMS, VISUALIZERS
 from mmdet3d.datasets.transforms.loading import LoadPointsFromFile, LoadAnnotations3D
 from mmcv.transforms.base import BaseTransform
-import numpy as np
 from mmengine.structures import BaseDataElement
 from mmdet3d.structures import LiDARInstance3DBoxes, CameraInstance3DBoxes, DepthInstance3DBoxes, Det3DDataSample, LiDARPoints, Coord3DMode
 from mmdet3d.datasets.transforms.formating import Pack3DDetInputs
 from os import path as osp
 import copy
 import cv2
-from ..utils import calc_relative_pose, convert_instance_mask_to_center_and_offset_label
 import matplotlib.pyplot as plt
 import torch
 import os
 from mmengine.logging import print_log
 import logging
+def log(msg = "" ,level: int = logging.INFO):
+    print_log(msg, "current", level)
 import time
+from ..utils import calc_relative_pose, convert_instance_mask_to_center_and_offset_label
 
-# NOTE add all ego motion 6 DOF
-# NOTE 把现在和未来的筛选放这里，intput 提供历史+当前输入，而data_samples提供未来+当前标签
-# NOTE 原文将box提前转换到EGO坐标系，数据处理方面，速度矢量在制作pkl的时候反转Y轴，然后统一随着box转到EGO坐标系下
-# NOTE 这里保持主干的检测在lidar坐标系下，而前后处理需要转换坐标自行从lidar转换出来
-# FIXME test的时候加上场景的详细信息
-# NOTE 添加其他代理到ego的变换矩阵
-# NOTE 原文V2X产生的数据是LIST，每个元素代表一个Agent，第一个是EGO，只有EGO包含了场景的所有信息，EGO单独经过
-#       pipline处理，最后将所有的结果按照每一个Agent的KEY整理为KEY:LIST的形式也就是提前collect
+### Transform Template ###
 
 # @TRANSFORMS.register_module()
 # class AddPoseNoise(BaseTransform):
@@ -34,6 +29,7 @@ import time
 
 #     def transform(self, results: Dict) -> Union[Dict,Tuple[List, List],None]:
 #         return None
+
 
 ### Single Agent Pipline ###
 
@@ -331,6 +327,7 @@ class Pack3DDetInputsV2X(Pack3DDetInputs):
     def transform(self, results: Dict) -> Union[Dict,Tuple[List, List],None]:
         return super().transform(results) # type: ignore
 
+
 ### Scene Pipline ###
 
 @TRANSFORMS.register_module()
@@ -391,12 +388,15 @@ class MakeMotionLabels(BaseTransform):
     def __init__(self,
         pc_range,
         voxel_size,
+        corr_pc_range = None,
+        corr_voxel_size = None,
         ego_id: int = -100,
         only_vehicle: bool = False,
         vehicle_id_list: list = [0, 1, 2],
         filter_invalid: bool = True,
         ignore_index:int = 255,
         ) -> None:
+
         self.pc_range = pc_range
         self.voxel_size = voxel_size
         self.voxel_size = np.array(self.voxel_size).astype(np.float32)
@@ -410,6 +410,24 @@ class MakeMotionLabels(BaseTransform):
             self.pc_range[1] + self.voxel_size[1] * 0.5
         ]).astype(np.float32)
         self.warp_size = (0.5 * (self.pc_range[3] - self.pc_range[0]), 0.5 * (self.pc_range[4] - self.pc_range[1]))
+
+        self.corr_enable = False
+        if (corr_pc_range is not None and corr_voxel_size is not None):
+            self.corr_enable = True
+            self.corr_pc_range = corr_pc_range
+            self.corr_voxel_size = corr_voxel_size
+            self.corr_voxel_size = np.array(self.corr_voxel_size).astype(np.float32)
+            self.corr_grid_size = np.array([
+                np.round((self.corr_pc_range[4] - self.corr_pc_range[1]) / self.corr_voxel_size[1]), # H
+                np.round((self.corr_pc_range[3] - self.corr_pc_range[0]) / self.corr_voxel_size[0]), # W
+                np.round((self.corr_pc_range[5] - self.corr_pc_range[2]) / self.corr_voxel_size[2]), # D
+            ]).astype(np.int32)
+            self.corr_offset_xy = np.array([
+                self.corr_pc_range[0] + self.corr_voxel_size[0] * 0.5,
+                self.corr_pc_range[1] + self.corr_voxel_size[1] * 0.5
+            ]).astype(np.float32)
+            self.corr_warp_size = (0.5 * (self.corr_pc_range[3] - self.corr_pc_range[0]), 0.5 * (self.corr_pc_range[4] - self.corr_pc_range[1]))
+
         self.ego_id = ego_id
         self.only_vehicle = only_vehicle
         self.vehicle_id_list = vehicle_id_list
@@ -500,7 +518,7 @@ class MakeMotionLabels(BaseTransform):
             }
             input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
 
-            if agent != 'infrastructure':
+            if agent != 'infrastructure' and self.corr_enable:
                 ego_segmentations = []
                 ego_instances = []
                 for i, timestamp in enumerate(future_seq_position):
@@ -511,17 +529,17 @@ class MakeMotionLabels(BaseTransform):
 
                     if gt_instances_3d.bboxes_3d is None:
                         segmentation = np.ones(
-                            (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
+                            (self.corr_grid_size[0], self.corr_grid_size[1])) * self.ignore_index # H, W
                         instance = np.ones_like(segmentation) * self.ignore_index
                     else:
-                        segmentation = np.zeros((self.grid_size[0], self.grid_size[1])) # H, W
+                        segmentation = np.zeros((self.corr_grid_size[0], self.corr_grid_size[1])) # H, W
                         instance = np.zeros_like(segmentation)
 
                     trans = future_pose_matrix[i, inf_idx, j, ...] # 4, 4
                     gt_instances_3d.bboxes_3d.rotate(trans[:3, :3].T, None)
                     gt_instances_3d.bboxes_3d.translate(trans[:3, 3])
                     bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
-                    bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
+                    bbox_corners_voxel = np.round((bbox_corners - self.corr_offset_xy) / self.corr_voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
 
                     poly_region = bbox_corners_voxel[0]
                     cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
@@ -538,7 +556,7 @@ class MakeMotionLabels(BaseTransform):
                     inf_motion_rela_matrix,
                     1, # ego only
                     ignore_index = self.ignore_index,
-                    spatial_extent = self.warp_size,
+                    spatial_extent = self.corr_warp_size,
                 ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
 
                 # 如果分割有任何是没有box的则清除中心度为ignore
@@ -558,8 +576,6 @@ class MakeMotionLabels(BaseTransform):
         return input_dict
 
 
-def log(msg = "" ,level: int = logging.INFO):
-    print_log(msg, "current", level)
 @TRANSFORMS.register_module()
 class CorrelationFilter(BaseTransform):
 

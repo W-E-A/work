@@ -5,8 +5,6 @@ import torch.nn.functional as F
 from mmdet3d.registry import MODELS
 from mmdet3d.models.utils import clip_sigmoid
 
-import pdb
-
 
 class BinarySegmentationLoss(torch.nn.Module):
     def __init__(self, pos_weight):
@@ -67,6 +65,7 @@ class SegmentationLoss(nn.Module):
             loss = loss[:, :, :k]
 
         return torch.mean(loss)
+
 
 class MotionSegmentationLoss(nn.Module):
     def __init__(self, class_weights, ignore_index=255, use_top_k=False,
