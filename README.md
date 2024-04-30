@@ -1,6 +1,8 @@
 ## Description
 
-### **基于预测引导的车路协同感知**
+### **基于交互风险与意图引导的车路协同感知**
+
+![](/assets/images/base.png)
 
 ## TODO
 
@@ -27,6 +29,8 @@
 ## Get Started
 
 `pip install -r requirements.txt`
+
+Choose one of the two methods below:
 
 ```Bash
 git clone https://github.com/klintan/pypcd.git
@@ -91,5 +95,8 @@ python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-i
 # analyze data
 python tools/analyze_data.py /path/to/config --mode analyze_data --verbose
 # python tools/analyze_data.py projects/MyProject/configs/exp1.py --mode analyze_data --verbose
+
+# generate env info
+pipreqs --ignore ./thirdpart/ --savepath ./current_env.txt --use-local ./
 
 ```

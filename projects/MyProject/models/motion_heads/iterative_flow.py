@@ -2,12 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from mmdet3d.registry import MODELS
-from ..dense_heads.base_taskhead import BaseTaskHead
-from ..dense_heads.loss_utils import MotionSegmentationLoss, SpatialRegressionLoss, ProbabilisticLoss, GaussianFocalLoss, SpatialProbabilisticLoss
-from ...utils.instance import predict_instance_segmentation_and_trajectories
-
-from ..modules.motion_modules import ResFuturePrediction, ResFuturePredictionV2
 from ._base_motion_head import BaseMotionHead
+from ..modules.motion_modules import ResFuturePrediction, ResFuturePredictionV2
 
 
 @MODELS.register_module()

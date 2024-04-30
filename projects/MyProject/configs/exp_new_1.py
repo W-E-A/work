@@ -3,7 +3,8 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
-train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
+# train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
+train_annfile_path = 'data/debug_dataset/deepaccident_infos_train.pkl'
 val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
 test_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
 
@@ -20,10 +21,13 @@ mask_range = [-3.0, -1.5, -5.0, 3.0, 1.5, 3.0]
 det_center_range = [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 motion_range = [-50, -50, -5.0, 50, 50, 3.0]
 voxel_size = [0.1, 0.1, 8.0]
-lidar_voxel_size = [0.4, 0.4, 8.0]
-motion_voxel_size = [0.5, 0.5, 8.0]
 det_out_factor = 4
-motion_out_factor = 4
+corr_out_factor = 4
+motion_out_factor = 5
+det_voxel_size = [voxel_size[0] * det_out_factor, voxel_size[1] * det_out_factor, voxel_size[2]]
+corr_voxel_size = [voxel_size[0] * corr_out_factor, voxel_size[1] * corr_out_factor, voxel_size[2]]
+motion_voxel_size = [voxel_size[0] * motion_out_factor, voxel_size[1] * motion_out_factor, voxel_size[2]]
+
 
 pad_delay = False
 det_with_velocity = True
@@ -166,6 +170,8 @@ train_scene_pipline = [
         type = 'MakeMotionLabels',
         pc_range = motion_range,
         voxel_size = motion_voxel_size,
+        corr_pc_range = lidar_range,
+        corr_voxel_size = corr_voxel_size,
         ego_id = -100,
         only_vehicle = True,
         vehicle_id_list = [0, 1, 2],
@@ -407,7 +413,7 @@ model = dict(
             prob_latent_dim=32,
             receptive_field=3,
             n_future=5,
-            grid_conf = [lidar_range, lidar_voxel_size],
+            grid_conf = [lidar_range, det_voxel_size],
             new_grid_conf = [motion_range, motion_voxel_size],
             using_spatial_prob=True,
             using_focal_loss=True,
@@ -425,6 +431,9 @@ model = dict(
         ),
         corr_head=dict(
             type='CorrGenerate',
+            pc_range=lidar_range,
+            n_future_and_present=5+1,
+            label_size=1+1+2+2,
             in_channels=sum([128, 128, 128]),
             loss_corr=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
             separate_head=dict(
@@ -463,11 +472,11 @@ model = dict(
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
         test_mode=test_mode, # FIXME
     ),
-    pts_fusion_cfg=dict(
-        train_ego_name=train_ego_name, # FIXME
-        test_ego_name=test_ego_name,
-        pc_range=lidar_range,
-    )
+    # pts_fusion_cfg=dict(
+    #     train_ego_name=train_ego_name, # FIXME
+    #     test_ego_name=test_ego_name,
+    #     corr_pc_range=lidar_range,
+    # )
 )
 
 lr = 1 * 1e-4

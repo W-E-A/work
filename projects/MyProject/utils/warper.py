@@ -3,8 +3,8 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
-from .geometry import vec2mat, invert_pose_matrix
 from typing import Union
+from .geometry import vec2mat, invert_pose_matrix
 
 class FeatureWarper(object):
     def __init__(self, pc_range):

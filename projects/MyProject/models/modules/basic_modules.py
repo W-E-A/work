@@ -1,10 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from collections import OrderedDict
 from functools import partial
-
 from ...utils.geometry import warp_features
 from ...utils import FeatureWarper
 
@@ -514,7 +512,6 @@ class TemporalBlock(nn.Module):
             x = self.projection(x)
         x = x + x_residual
         return x
-
 
 
 class V2X_fusion(nn.Module):

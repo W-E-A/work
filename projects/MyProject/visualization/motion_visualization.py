@@ -2,10 +2,9 @@ import numpy as np
 import torch
 import matplotlib.pylab
 import matplotlib.pyplot as plt
-# import pdb
 import cv2
-
 from ..utils import predict_instance_segmentation_and_trajectories
+
 
 DEFAULT_COLORMAP = matplotlib.pylab.cm.jet
 INSTANCE_COLOURS = np.asarray([
@@ -413,13 +412,6 @@ def plot_motion_prediction(motion_preds):
 
     return vis_image
 
-# def convert_figure_numpy(figure):
-#     """ Convert figure to numpy image """
-#     figure_np = np.frombuffer(figure.canvas.tostring_rgb(), dtype=np.uint8)
-#     figure_np = figure_np.reshape(
-#         figure.canvas.get_width_height()[::-1] + (3,))
-#     return figure_np
-
 
 def generate_instance_colours(instance_map):
     # Most distinct 22 colors (kelly colors from https://stackoverflow.com/questions/470690/how-to-automatically-generate
@@ -429,11 +421,3 @@ def generate_instance_colours(instance_map):
     return {instance_id: INSTANCE_COLOURS[global_instance_id % len(INSTANCE_COLOURS)] for
             instance_id, global_instance_id in instance_map.items()
             }
-
-
-# def flip_rotate_image(image):
-#     pil_img = Image.fromarray(image)
-#     pil_img = pil_img.transpose(Image.FLIP_TOP_BOTTOM)
-#     pil_img = pil_img.transpose(Image.ROTATE_90)
-
-#     return np.array(pil_img)

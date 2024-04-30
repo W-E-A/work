@@ -3,10 +3,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from .geometry import warp_features
 import math
 from skimage.measure import find_contours, approximate_polygon
 import cv2
+from .geometry import warp_features
 
 
 def convert_instance_mask_to_center_and_offset_label(
@@ -78,8 +78,8 @@ def convert_instance_mask_to_center_and_offset_label(
                     future_displacement_label[t - 1, 1, prev_mask] = delta_y
                 
                 if t == seq_len - 1:
-                    future_displacement_label[t, 0, instance_mask] = 0.0 # 最后一帧未来的flow没有就认为和上一帧的一致
-                    future_displacement_label[t, 1, instance_mask] = 0.0 # 最后一帧未来的flow没有就认为和上一帧的一致
+                    future_displacement_label[t, 0, instance_mask] = 0.0 # 最后一帧未来的flow没有就认为不动
+                    future_displacement_label[t, 1, instance_mask] = 0.0 # 最后一帧未来的flow没有就认为不动
             prev_xc = xc
             prev_yc = yc
             prev_mask = instance_mask
@@ -223,7 +223,7 @@ def make_instance_id_temporally_consistent(pred_inst, future_flow, matching_thre
             torch.arange(h, dtype=torch.float, device=device),
             torch.arange(w, dtype=torch.float, device=device)
         )
-        grid = torch.stack((grid_x.transpose(1,0), grid_y.transpose(1,0)), dim=0)
+        grid = torch.stack((grid_y.transpose(1,0), grid_x.transpose(1,0)), dim=0)
         # import pdb;pdb.set_trace()
 
         # Add future flow
@@ -253,7 +253,7 @@ def make_instance_id_temporally_consistent(pred_inst, future_flow, matching_thre
             torch.arange(h, dtype=torch.float, device=device),
             torch.arange(w, dtype=torch.float, device=device)
         )
-        grid = torch.stack((grid_x.transpose(1,0), grid_y.transpose(1,0)), dim=0)
+        grid = torch.stack((grid_y.transpose(1,0), grid_x.transpose(1,0)), dim=0)
         n_instances = int(pred_inst[0, t + 1].max().item())
 
         if n_instances == 0:
@@ -361,7 +361,7 @@ def predict_instance_segmentation_and_trajectories(
             torch.arange(h, dtype=torch.float, device=preds.device),
             torch.arange(w, dtype=torch.float, device=preds.device)
         )
-        grid = torch.stack((grid_x.transpose(1,0), grid_y.transpose(1,0)), dim=0)
+        grid = torch.stack((grid_y.transpose(1,0), grid_x.transpose(1,0)), dim=0)
 
         for instance_id in torch.unique(consistent_instance_seg[0, 0])[1:].cpu().numpy():
             for t in range(seq_len):
@@ -373,7 +373,7 @@ def predict_instance_segmentation_and_trajectories(
         for key, value in matched_centers.items():
             matched_centers[key] = torch.stack(value).cpu().numpy()[:, ::-1]
             print(f"{key} : {len(value)}")
-        import pdb;pdb.set_trace()
+        # import pdb;pdb.set_trace()
 
         return consistent_instance_seg, matched_centers
 

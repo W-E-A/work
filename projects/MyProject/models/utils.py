@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 @MODELS.register_module()
 class PointPillarsScatterWrapper(BaseModule):
     def __init__(self,
@@ -26,7 +27,8 @@ class PointPillarsScatterWrapper(BaseModule):
     
     def forward(self, *args, **kwargs):
         return self.scatter( *args, **kwargs)
-    
+
+
 @MODELS.register_module()
 class GaussianConv(BaseModule):
     def __init__(self,
@@ -61,10 +63,12 @@ class GaussianConv(BaseModule):
             smooth_x = x
         return smooth_x
 
-class BevFeatureSlicer(nn.Module):
+
+@MODELS.register_module()
+class BevFeatureSlicer(BaseModule):
     # crop the interested area in BEV feature for semantic map segmentation
     def __init__(self, grid_conf, new_grid_conf):
-        super().__init__()
+        super(BevFeatureSlicer, self).__init__()
 
         if grid_conf == new_grid_conf:
             self.identity_mapping = True
