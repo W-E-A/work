@@ -2,7 +2,7 @@
 
 ### **基于交互风险与意图引导的车路协同感知**
 
-![](/assets/images/base.png)
+![](./assets/images/base.png)
 
 ## TODO
 

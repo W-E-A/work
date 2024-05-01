@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 import numpy as np
 import scipy
 from mmdet3d.registry import MODELS
@@ -165,7 +166,7 @@ class BaseMotionHead(BaseTaskHead):
         self.probabilistic_loss = ProbabilisticLoss(
             foreground=self.prob_on_foreground)
 
-    def forward(self, bevfeats, targets=None, noise=None):
+    def forward(self, bevfeats, future_distribution_inputs=None, noise=None):
         '''
         the forward process of motion head:
         1. get present & future distributions
@@ -174,11 +175,8 @@ class BaseMotionHead(BaseTaskHead):
         '''
         bevfeats = bevfeats[0]
 
-        if self.training or self.posterior_with_label:
-            self.training_labels, future_distribution_inputs = self.prepare_future_labels(
-                targets)
-        else:
-            future_distribution_inputs = None
+        if self.training:
+            assert future_distribution_inputs is not None
 
         res = {}
         if self.n_future > 0:
@@ -335,7 +333,7 @@ class BaseMotionHead(BaseTaskHead):
 
         return samples, output_distribution # B 1 dim 200 200 and dict
 
-    def prepare_future_labels(self, batch, center_sampling_mode='nearest'):
+    def prepare_future_labels(self, batch, label_sampling_mode='nearest', center_sampling_mode='nearest'):
         labels = {}
         future_distribution_inputs = []
         segmentation_labels = torch.stack(batch['motion_segmentation']) # B, len, H, W
@@ -349,13 +347,10 @@ class BaseMotionHead(BaseTaskHead):
         if bev_transform is not None:
             bev_transform = bev_transform.float()
 
-        label_mode = 'nearest'
-        # label_mode = 'bilinear'
-
         segmentation_labels = self.warper.cumulative_warp_features_reverse(
             segmentation_labels.float().unsqueeze(2), # B, len, 1, H, W
             future_egomotion,
-            mode=label_mode, bev_transform=bev_transform,
+            mode=label_sampling_mode, bev_transform=bev_transform,
         ).long().contiguous() # to long(0 or 1)
         labels['segmentation'] = segmentation_labels  # B, len, 1, H, W
         future_distribution_inputs.append(segmentation_labels)
@@ -364,7 +359,7 @@ class BaseMotionHead(BaseTaskHead):
         gt_instance = self.warper.cumulative_warp_features_reverse(
             gt_instance.float().unsqueeze(2), # B, len, 1, H, W
             future_egomotion,
-            mode=label_mode, bev_transform=bev_transform,
+            mode=label_sampling_mode, bev_transform=bev_transform,
         ).long().contiguous()[:, :, 0] # to long(0, 1~254, 255) # B, len, H, W
         labels['instance'] = gt_instance
 
@@ -378,7 +373,7 @@ class BaseMotionHead(BaseTaskHead):
         instance_offset_labels = self.warper.cumulative_warp_features_reverse(
             instance_offset_labels,
             future_egomotion,
-            mode=label_mode, bev_transform=bev_transform,
+            mode=label_sampling_mode, bev_transform=bev_transform,
         ).contiguous()
         labels['offset'] = instance_offset_labels # B, len, 2, H, W
 
@@ -388,7 +383,7 @@ class BaseMotionHead(BaseTaskHead):
         instance_flow_labels = self.warper.cumulative_warp_features_reverse(
             instance_flow_labels,
             future_egomotion,
-            mode=label_mode, bev_transform=bev_transform,
+            mode=label_sampling_mode, bev_transform=bev_transform,
         ).contiguous()
         labels['flow'] = instance_flow_labels # B, len, 2, H, W
         future_distribution_inputs.append(instance_flow_labels)
@@ -399,7 +394,9 @@ class BaseMotionHead(BaseTaskHead):
 
         return labels, future_distribution_inputs # dict tensor B len 1+1+2+2 200, 200
 
-    def loss(self, predictions, targets=None):
+    def loss_by_feat(self, predictions: dict, training_labels: dict = None):
+        # ['instance', 'segmentation', 'flow', 'centerness', 'offset'] training_labels
+        # ['segmentation', 'instance_flow', 'instance_center', 'instance_offset'] predictions 2 2 1 2
         loss_dict = {}
 
         '''
@@ -409,12 +406,12 @@ class BaseMotionHead(BaseTaskHead):
             'instance_offset': 2,
             'instance_flow': 2,
         '''
-        
-        for key, val in self.training_labels.items():
-            self.training_labels[key] = val.float() # seg 01 to float others remain unchanged(float)
+        assert training_labels is not None
+        for key, val in training_labels.items():
+            training_labels[key] = val.float() # seg 01 to float others remain unchanged(float)
         # import pdb;pdb.set_trace()
         frame_valid_mask = torch.tensor([True] * (self.receptive_field + self.n_future)).unsqueeze(0) # all valid 1, len
-        frame_valid_mask = frame_valid_mask.repeat(self.training_labels['segmentation'].shape[0], 1).bool() # B, len
+        frame_valid_mask = frame_valid_mask.repeat(training_labels['segmentation'].shape[0], 1).bool() # B, len
         past_valid_mask = frame_valid_mask[:, :self.receptive_field]
         future_frame_mask = frame_valid_mask[:, (self.receptive_field - 1):]
 
@@ -435,39 +432,39 @@ class BaseMotionHead(BaseTaskHead):
 
         # segmentation
         loss_dict['loss_motion_seg'] = self.seg_criterion(
-            predictions['segmentation'], self.training_labels['segmentation'].long(), # again to long
+            predictions['segmentation'], training_labels['segmentation'].long(), # again to long
             frame_mask=future_frame_mask,
         ) # B, len, 2, 200, 200  B, len, 1, 200, 200, onehot
 
         # instance centerness, but why not focal loss
         if self.using_focal_loss:
             loss_dict['loss_motion_centerness'] = self.cls_instance_center_criterion(
-                predictions['instance_center'], self.training_labels['centerness'],
+                predictions['instance_center'], training_labels['centerness'],
                 frame_mask=future_frame_mask,
             ) # B, len, 1, 200, 200  B, len, 1, 200, 200
         else:
             loss_dict['loss_motion_centerness'] = self.reg_instance_center_criterion(
-                predictions['instance_center'], self.training_labels['centerness'],
+                predictions['instance_center'], training_labels['centerness'],
                 frame_mask=future_frame_mask,
             ) # B, len, 1, 200, 200  B, len, 1, 200, 200
 
         # instance offset
         loss_dict['loss_motion_offset'] = self.reg_instance_offset_criterion(
-            predictions['instance_offset'], self.training_labels['offset'],
+            predictions['instance_offset'], training_labels['offset'],
             frame_mask=future_frame_mask,
         ) # B, len, 2, 200, 200  B, len, 2, 200, 200
 
         if self.n_future > 0:
             # instance flow
             loss_dict['loss_motion_flow'] = self.reg_instance_flow_criterion(
-                predictions['instance_flow'], self.training_labels['flow'],
+                predictions['instance_flow'], training_labels['flow'],
                 frame_mask=future_frame_mask,
             ) # B, len, 2, 200, 200  B, len, 2, 200, 200
 
             if self.probabilistic_enable:
                 loss_dict['loss_motion_prob'] = self.probabilistic_loss(
                     predictions, # present future / mu sigma
-                    foreground_mask=self.training_labels['segmentation'],
+                    foreground_mask=training_labels['segmentation'],
                     batch_valid_mask=prob_valid_mask,
                 ) # ??? FIXME
 
@@ -476,8 +473,9 @@ class BaseMotionHead(BaseTaskHead):
 
         return loss_dict
 
-    def inference(self, predictions):
-        # [b, s, num_cls, h, w]
+    def predict_by_feat(self, predictions: dict):
+        # ['segmentation', 'instance_flow', 'instance_center', 'instance_offset'] 2 2 1 2
+        # output future seg and ins-seg, not traj
         seg_prediction = torch.argmax(
             predictions['segmentation'], dim=2, keepdims=True) # B, len, 1, H, W
 

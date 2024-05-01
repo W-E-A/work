@@ -79,104 +79,81 @@ class MTHead(BaseModule):
             self.motion_head = MODELS.build(motion_head)
         self.corr_head = None
         if corr_head:
+            corr_head.update(train_cfg=self.train_cfg)
+            corr_head.update(test_cfg=self.test_cfg)
             self.corr_head = MODELS.build(corr_head)
 
-    def forward(self, feats: Union[Tensor, List[Tensor]], motion_targets: Optional[dict] = None, ego_motion: Optional[dict] = None) -> dict:
+    def forward(self,
+        feats: Union[Tensor, List[Tensor]],
+        det_forward_kwargs: Optional[dict] = None,
+        motion_forward_kwargs: Optional[dict] = None,
+        corr_forward_kwargs: Optional[dict] = None,):
         return_dict = {}
+        # import pdb;pdb.set_trace()
         if not isinstance(feats, Sequence):
             feats = [feats]
         if self.det_head:
-            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.det_head(feats)
+            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.det_head(feats, **det_forward_kwargs) # FIXME <100MiB
             return_dict['det_feat'] = multi_tasks_multi_feats # [[t1,],[t2,],[...]]
         if self.motion_head:
-            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.motion_head(feats, motion_targets)
+            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.motion_head(feats, **motion_forward_kwargs) # FIXME 6000MiB
             return_dict['motion_feat'] = multi_tasks_multi_feats
         if self.corr_head:
-            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.corr_head(feats, ego_motion)
+            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.corr_head(feats, **corr_forward_kwargs) # FIXME 5000MiB
             return_dict['corr_feat'] = multi_tasks_multi_feats
 
         return return_dict
 
     def loss(self,
              feat_dict: dict,
-             det_gt: Optional[dict] = None,
-             motion_gt: Optional[dict] = None,
-             corr_gt: Optional[dict] = None,
-             gather_task_loss: bool = False
+             det_loss_kwargs: Optional[dict] = None,
+             motion_loss_kwargs: Optional[dict] = None,
+             corr_loss_kwargs: Optional[dict] = None,
              ) -> dict:
 
         loss_dict = {}
         
-        if 'det_feat' in feat_dict and det_gt != None:
+        if 'det_feat' in feat_dict:
             multi_tasks_multi_feats = feat_dict['det_feat']
-            # FIXME just one scale here
-            temp_dict = self.det_head.loss_by_feat(multi_tasks_multi_feats, **det_gt) # type: ignore
-            if gather_task_loss:
-                gather_dict = {}
-                for key in temp_dict.keys():
-                    if 'loss' in key:
-                        cut_key = key.split('.')[-1]
-                        if cut_key not in gather_dict:
-                            gather_dict[cut_key] = []
-                        gather_dict[cut_key].append(temp_dict[key])
-                loss_dict.update(gather_dict)
-            else:
-                loss_dict.update(temp_dict)
+            temp_dict = self.det_head.loss_by_feat(multi_tasks_multi_feats, **det_loss_kwargs) # type: ignore
+            loss_dict.update(temp_dict)
 
-        if 'motion_feat' in feat_dict :
+        if 'motion_feat' in feat_dict:
             multi_tasks_multi_feats = feat_dict['motion_feat']
-            # FIXME just one scale here
-            temp_dict = self.motion_head.loss(multi_tasks_multi_feats) # type: ignore
-            if gather_task_loss:
-                gather_dict = {}
-                for key in temp_dict.keys():
-                    if 'loss' in key:
-                        cut_key = key.split('.')[-1]
-                        if cut_key not in gather_dict:
-                            gather_dict[cut_key] = []
-                        gather_dict[cut_key].append(temp_dict[key])
-                loss_dict.update(gather_dict)
-            else:
-                loss_dict.update(temp_dict)
+            temp_dict = self.motion_head.loss_by_feat(multi_tasks_multi_feats, **motion_loss_kwargs) # type: ignore
+            loss_dict.update(temp_dict)
+
         if 'corr_feat' in feat_dict :
             multi_tasks_multi_feats = feat_dict['corr_feat']
-            # FIXME just one scale here
-            temp_dict = self.corr_head.loss(multi_tasks_multi_feats, corr_gt) # type: ignore
-            if gather_task_loss:
-                gather_dict = {}
-                for key in temp_dict.keys():
-                    if 'loss' in key:
-                        cut_key = key.split('.')[-1]
-                        if cut_key not in gather_dict:
-                            gather_dict[cut_key] = []
-                        gather_dict[cut_key].append(temp_dict[key])
-                loss_dict.update(gather_dict)
-            else:
-                loss_dict.update(temp_dict)
+            temp_dict = self.corr_head.loss_by_feat(multi_tasks_multi_feats, **corr_loss_kwargs) # type: ignore
+            loss_dict.update(temp_dict)
         
         return loss_dict
 
     def predict(self,
              feat_dict: dict,
-             batch_input_metas: Optional[List[dict]] = None,
-             return_heatmaps: bool = False,
+             det_pred_kwargs: Optional[dict] = None,
+             motion_pred_kwargs: Optional[dict] = None,
+             corr_pred_kwargs: Optional[dict] = None,
              ) -> dict:
 
         predict_dict = {}
         
-        if 'det_feat' in feat_dict and batch_input_metas != None:
+        if 'det_feat' in feat_dict:
             multi_tasks_multi_feats = feat_dict['det_feat']
-            # FIXME just one scale here
-            if return_heatmaps:
-                predict_dict['det_pred'] = self.det_head.predict_heatmaps(multi_tasks_multi_feats) # type: ignore
-            else:
-                predict_dict['det_pred'] = self.det_head.predict_by_feat(multi_tasks_multi_feats, batch_input_metas) # type: ignore
+            predict_dict['det_pred'] = self.det_head.predict_by_feat(multi_tasks_multi_feats, **det_pred_kwargs) # type: ignore
+            # if return_det_heatmaps:
+            #     predict_dict['det_pred'] = self.det_head.predict_heatmaps(multi_tasks_multi_feats) # type: ignore
+            # else:
+            #     predict_dict['det_pred'] = self.det_head.predict_by_feat(multi_tasks_multi_feats, batch_input_metas) # type: ignore
 
         if 'motion_feat' in feat_dict:
             multi_tasks_multi_feats = feat_dict['motion_feat']
-            # FIXME just one scale here
-            batch_result_instances = self.motion_head.inference(multi_tasks_multi_feats) # type: ignore
-            predict_dict['motion_pred'] = batch_result_instances
+            predict_dict['motion_pred'] = self.motion_head.predict_by_feat(multi_tasks_multi_feats, **motion_pred_kwargs) # type: ignore
+        
+        if 'corr_feat' in feat_dict:
+            multi_tasks_multi_feats = feat_dict['corr_feat']
+            predict_dict['corr_pred'] = self.corr_head.predict_by_feat(multi_tasks_multi_feats, **corr_pred_kwargs) # type: ignore
 
         return predict_dict
 
@@ -193,8 +170,6 @@ class CenterHeadModified(BaseModule):
                      type='mmdet.GaussianFocalLoss', reduction='mean'),
                  loss_bbox: dict = dict(
                      type='mmdet.L1Loss', reduction='none', loss_weight=0.25),
-                 #wyc改
-                 loss_corr = None,
                  separate_head: dict = dict(
                      type='mmdet.SeparateHead',
                      init_bias=-2.19,
@@ -228,9 +203,6 @@ class CenterHeadModified(BaseModule):
 
         self.loss_cls = MODELS.build(loss_cls)
         self.loss_bbox = MODELS.build(loss_bbox)
-        #wyc改
-        if loss_corr is not None:
-            self.loss_corr = MODELS.build(loss_corr)
         self.bbox_coder = TASK_UTILS.build(bbox_coder) # type: ignore
         self.num_anchor_per_locs = [n for n in num_classes]
 
@@ -259,10 +231,6 @@ class CenterHeadModified(BaseModule):
             self.with_velocity = True
         else:
             self.with_velocity = False
-        if 'corr' in common_heads.keys():
-            self.with_correlation = True
-        else:
-            self.with_correlation = False
 
         if self.train_cfg:
             self.max_objs = int(self.train_cfg['max_objs'] * self.train_cfg['dense_reg'])
@@ -279,7 +247,6 @@ class CenterHeadModified(BaseModule):
             self.gaussian_overlap = self.train_cfg['gaussian_overlap']
             self.min_radius = self.train_cfg['min_radius']
             self.code_weights = self.train_cfg.get('code_weights', None)
-            self.rela_gaussian_overlap = self.train_cfg['rela_gaussian_overlap']
         if self.test_cfg:
             self.nms_type = self.test_cfg['nms_type']
             self.test_min_radius = self.test_cfg['min_radius']
@@ -318,130 +285,6 @@ class CenterHeadModified(BaseModule):
             feat = feat[mask] # B, m, 8/10
             feat = feat.view(-1, dim) # B*M 8/10 
         return feat
-    
-    # def get_relamaps(
-    #     self,
-    #     batch_gt_instances_3d: List[InstanceData],
-    # ) -> Tuple[List[Tensor]]:
-    #     """
-    #     task - tensor[b, anyshape] align with prediction format
-    #     """
-    #     relamaps = multi_apply(self.get_relamaps_single, batch_gt_instances_3d)
-    #     # Transpose relamaps
-    #     relamaps = list(map(list, zip(*relamaps)))
-    #     relamaps = [torch.stack(hms_) for hms_ in relamaps]
-    #     return relamaps # type: ignore
-
-    # def get_relamaps_single(self,
-    #                        gt_instances_3d: InstanceData) -> Tuple[Tensor]:
-    #     gt_labels_3d = gt_instances_3d.labels_3d # type: ignore
-    #     gt_bboxes_3d = gt_instances_3d.bboxes_3d # type: ignore
-    #     track_id = gt_instances_3d.track_id # type: ignore
-    #     importance = gt_instances_3d.importance # type: ignore
-    #     device = gt_labels_3d.device
-    #     gt_bboxes_3d = torch.cat( # get gravity center box
-    #         (gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]),
-    #         dim=1).to(device)
-    #     track_id = torch.tensor(track_id, dtype=gt_labels_3d.dtype, device=device)
-    #     importance = torch.tensor(importance, dtype=torch.bool, device=device)
-
-    #     # reorganize the gt_dict by tasks
-    #     task_masks = []
-    #     flag = 0
-    #     for class_name in self.class_names:
-    #         task_masks.append([
-    #             torch.where(gt_labels_3d == class_name.index(i) + flag)
-    #             for i in class_name
-    #         ])
-    #         flag += len(class_name)
-
-    #     task_boxes = []
-    #     task_classes = []
-    #     task_ids = []
-    #     task_imps = []
-    #     flag2 = 0
-    #     for idx, mask in enumerate(task_masks):
-    #         task_box = []
-    #         task_class = []
-    #         task_id = []
-    #         task_imp = []
-    #         for m in mask:
-    #             task_box.append(gt_bboxes_3d[m])
-    #             # 0 is background for each task, so we need to add 1 here.
-    #             task_class.append(gt_labels_3d[m] + 1 - flag2)
-    #             task_id.append(track_id[m])
-    #             task_imp.append(importance[m])
-    #         task_boxes.append(torch.cat(task_box, axis=0).to(device)) # type: ignore
-    #         task_classes.append(torch.cat(task_class).long().to(device))
-    #         task_ids.append(torch.cat(task_id, axis=0).to(device)) # type: ignore
-    #         task_imps.append(torch.cat(task_imp, axis=0).to(device)) # type: ignore
-    #         flag2 += len(mask)
-    #     draw_gaussian = draw_heatmap_gaussian
-
-    #     relamaps = []
-
-    #     task_len = len(self.task_heads)
-    #     for idx in range(task_len):
-    #         relamap = gt_bboxes_3d.new_zeros((
-    #             len(self.class_names[idx]),
-    #             self.feature_map_size[0].item(),
-    #             self.feature_map_size[1].item()
-    #         )) # type: ignore
-
-    #         num_objs = min(task_boxes[idx].shape[0], self.max_objs)
-
-    #         for k in range(num_objs):
-    #             cls_id = task_classes[idx][k] - 1 # sub class
-    #             imp = task_imps[idx][k]
-
-    #             length = task_boxes[idx][k][3]
-    #             width = task_boxes[idx][k][4]
-    #             length = length / self.voxel_size[0] / self.out_size_factor
-    #             width = width / self.voxel_size[1] / self.out_size_factor
-
-    #             if width > 0 and length > 0:
-    #                 radius = gaussian_radius(
-    #                     (width, length),
-    #                     min_overlap=self.gaussian_overlap)
-    #                 radius = max(self.min_radius, int(radius))
-
-    #                 rela_radius = gaussian_radius(
-    #                     (width, length),
-    #                     min_overlap=self.rela_gaussian_overlap)
-    #                 rela_radius = max(self.min_radius, int(rela_radius))
-
-    #                 # be really careful for the coordinate system of
-    #                 # your box annotation.
-    #                 x, y = task_boxes[idx][k][0], task_boxes[idx][k][1]
-
-    #                 coor_x = (
-    #                     x - self.pc_range[0]
-    #                 ) / self.voxel_size[0] / self.out_size_factor
-    #                 coor_y = (
-    #                     y - self.pc_range[1]
-    #                 ) / self.voxel_size[1] / self.out_size_factor
-
-    #                 center = torch.tensor([coor_x, coor_y],
-    #                                       dtype=torch.float32,
-    #                                       device=device)
-    #                 center_int = center.to(torch.int32)
-
-    #                 # throw out not in range objects to avoid out of array
-    #                 # area when creating the heatmap
-    #                 if not (0 <= center_int[0] < self.feature_map_size[1]
-    #                         and 0 <= center_int[1] < self.feature_map_size[0]):
-    #                     continue
-                    
-    #                 if imp == True:
-    #                     draw_gaussian(relamap[cls_id], center_int, rela_radius)
-
-    #                 x, y = center_int[0], center_int[1]
-
-    #                 assert (y * self.feature_map_size[1] + x <
-    #                         self.feature_map_size[1] * self.feature_map_size[0])
-
-    #         relamaps.append(relamap)
-    #     return relamaps # type: ignore
 
     def get_targets(
         self,
@@ -450,11 +293,8 @@ class CenterHeadModified(BaseModule):
         """
         task - tensor[b, anyshape] align with prediction format
         """
-        corr_gts, heatmaps, anno_boxes, inds, masks = multi_apply(
+        heatmaps, anno_boxes, inds, masks = multi_apply(
             self.get_targets_single, batch_gt_instances_3d)
-        # import pdb;pdb.set_trace()
-        corr_gts = list(map(list, zip(*corr_gts)))
-        corr_gts = [torch.stack(corr_) for corr_ in corr_gts]
         # Transpose heatmaps
         heatmaps = list(map(list, zip(*heatmaps)))
         heatmaps = [torch.stack(hms_) for hms_ in heatmaps]
@@ -467,7 +307,7 @@ class CenterHeadModified(BaseModule):
         # Transpose inds
         masks = list(map(list, zip(*masks)))
         masks = [torch.stack(masks_) for masks_ in masks]
-        return corr_gts, heatmaps, anno_boxes, inds, masks # type: ignore
+        return heatmaps, anno_boxes, inds, masks # type: ignore
 
     def get_targets_single(self,
                            gt_instances_3d: InstanceData) -> Tuple[Tensor]:
@@ -492,16 +332,11 @@ class CenterHeadModified(BaseModule):
         gt_labels_3d = gt_instances_3d.labels_3d # type: ignore
         gt_bboxes_3d = gt_instances_3d.bboxes_3d # type: ignore
         track_id = gt_instances_3d.track_id # type: ignore
-        #wyc改
-        gt_correlation = gt_instances_3d.correlation[..., None]
 
         device = gt_labels_3d.device
         gt_bboxes_3d = torch.cat( # get gravity center box
             (gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]),
             dim=1).to(device)
-        #wyc改
-        if gt_correlation is not None:
-            gt_bboxes_3d = torch.cat([gt_bboxes_3d, gt_correlation], dim=1)
             
         track_id = torch.tensor(track_id, dtype=gt_labels_3d.dtype, device=device)
 
@@ -542,15 +377,10 @@ class CenterHeadModified(BaseModule):
                 self.feature_map_size[0].item(),
                 self.feature_map_size[1].item()
             )) # type: ignore
-            relamap = copy.deepcopy(heatmap)
 
             if self.with_velocity:
-                if self.with_correlation:
-                    anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 11),
-                                                    dtype=torch.float32)
-                else:
-                    anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 10),
-                                                    dtype=torch.float32)
+                anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 10),
+                                                dtype=torch.float32)
             else:
                 anno_box = gt_bboxes_3d.new_zeros((self.max_objs, 8),
                                                 dtype=torch.float32)
@@ -573,11 +403,6 @@ class CenterHeadModified(BaseModule):
                         (width, length),
                         min_overlap=self.gaussian_overlap)
                     radius = max(self.min_radius, int(radius))
-
-                    rela_radius = gaussian_radius(
-                        (width, length),
-                        min_overlap=self.rela_gaussian_overlap)
-                    rela_radius = max(self.min_radius, int(rela_radius))
 
                     # be really careful for the coordinate system of
                     # your box annotation.
@@ -613,38 +438,19 @@ class CenterHeadModified(BaseModule):
                     ind[new_idx] = y * self.feature_map_size[1] + x
                     mask[new_idx] = 1
                     if self.with_velocity:
-                        #wyc改
-                        if self.with_correlation:
-                            corr = task_boxes[idx][k][9]
-                            vx, vy = task_boxes[idx][k][7:9]
-                            rot = task_boxes[idx][k][6]
-                            box_dim = task_boxes[idx][k][3:6]
-                            if self.norm_bbox:
-                                box_dim = box_dim.log()
-                            
-                            anno_box[new_idx] = torch.cat([
-                                center - torch.tensor([x, y], device=device),
-                                z.unsqueeze(0), box_dim,
-                                torch.sin(rot).unsqueeze(0),
-                                torch.cos(rot).unsqueeze(0),
-                                vx.unsqueeze(0),
-                                vy.unsqueeze(0),
-                                corr.unsqueeze(0)
-                            ])
-                        else:
-                            vx, vy = task_boxes[idx][k][7:9]
-                            rot = task_boxes[idx][k][6]
-                            box_dim = task_boxes[idx][k][3:6]
-                            if self.norm_bbox:
-                                box_dim = box_dim.log()
-                            anno_box[new_idx] = torch.cat([
-                                center - torch.tensor([x, y], device=device),
-                                z.unsqueeze(0), box_dim,
-                                torch.sin(rot).unsqueeze(0),
-                                torch.cos(rot).unsqueeze(0),
-                                vx.unsqueeze(0),
-                                vy.unsqueeze(0)
-                            ])
+                        vx, vy = task_boxes[idx][k][7:9]
+                        rot = task_boxes[idx][k][6]
+                        box_dim = task_boxes[idx][k][3:6]
+                        if self.norm_bbox:
+                            box_dim = box_dim.log()
+                        anno_box[new_idx] = torch.cat([
+                            center - torch.tensor([x, y], device=device),
+                            z.unsqueeze(0), box_dim,
+                            torch.sin(rot).unsqueeze(0),
+                            torch.cos(rot).unsqueeze(0),
+                            vx.unsqueeze(0),
+                            vy.unsqueeze(0)
+                        ])
                     else:
                         rot = task_boxes[idx][k][6]
                         box_dim = task_boxes[idx][k][3:6]
@@ -661,59 +467,7 @@ class CenterHeadModified(BaseModule):
             anno_boxes.append(anno_box)
             masks.append(mask)
             inds.append(ind)
-        #gt_corr_heatmap生成
-        num_objs = min(gt_bboxes_3d.shape[0], self.max_objs)
-        num_corr_pos = torch.tensor([gt_bboxes_3d[:,9].gt(0.3).float().sum().item()])
-        gt_corr_heatmap = gt_bboxes_3d.new_zeros((
-            1,
-            self.feature_map_size[0].item(),
-            self.feature_map_size[1].item()
-        )) # type: ignore
-        for k in range(num_objs):
-            length = gt_bboxes_3d[k][3]
-            width = gt_bboxes_3d[k][4]
-            length = length / self.voxel_size[0] / self.out_size_factor
-            width = width / self.voxel_size[1] / self.out_size_factor
-            if width > 0 and length > 0:
-                radius = gaussian_radius(
-                    (width, length),
-                    min_overlap=self.gaussian_overlap)
-                radius = max(self.min_radius, int(radius))
-
-                rela_radius = gaussian_radius(
-                    (width, length),
-                    min_overlap=self.rela_gaussian_overlap)
-                rela_radius = max(self.min_radius, int(rela_radius))
-
-                # be really careful for the coordinate system of
-                # your box annotation.
-                x, y, z = gt_bboxes_3d[k][0], gt_bboxes_3d[k][1], gt_bboxes_3d[k][2]
-
-                coor_x = (
-                    x - self.pc_range[0]
-                ) / self.voxel_size[0] / self.out_size_factor
-                coor_y = (
-                    y - self.pc_range[1]
-                ) / self.voxel_size[1] / self.out_size_factor
-                center = torch.tensor([coor_x, coor_y],
-                                        dtype=torch.float32,
-                                        device=device)
-                center_int = center.to(torch.int32)
-
-                # throw out not in range objects to avoid out of array
-                # area when creating the heatmap
-                if not (0 <= center_int[0] < self.feature_map_size[1] and 0 <= center_int[1] < self.feature_map_size[0]):
-                    continue
-
-                draw_gaussian(gt_corr_heatmap[0], center_int, radius, k=gt_bboxes_3d[k][9])  ###后续需要修改
-                # import pdb;pdb.set_trace()
-                # draw_gaussian(gt_corr_heatmap, center_int, radius)  ###后续需要修改
-
-                x, y = center_int[0], center_int[1]
-                assert (y * self.feature_map_size[1] + x <
-                        self.feature_map_size[1] * self.feature_map_size[0])
-        
-        return [gt_corr_heatmap, num_corr_pos], heatmaps, anno_boxes, inds, masks # type: ignore
+        return heatmaps, anno_boxes, inds, masks # type: ignore
 
     def loss_by_feat(self,
                      preds_dicts: Tuple[List[dict]],
@@ -758,17 +512,6 @@ class CenterHeadModified(BaseModule):
             isnotnan = (~torch.isnan(target_box)).float() # B M 8/10
             mask *= isnotnan # B M 8/10
             bbox_weights = mask * mask.new_tensor(self.code_weights) # B M 8/10 * 8/10
-            #wyc改
-            if self.with_correlation:
-                corr_weights = bbox_weights[...,-1][...,None]
-                bbox_weights = bbox_weights[..., :-1]
-                target_corr = target_box[..., -1][..., None]
-                target_box = target_box[..., :-1]
-                pred_corr = pred_result['corr'].permute(0, 2, 3, 1).contiguous()
-                pred_corr = pred_corr.view(pred_corr.size(0), -1, pred_corr.size(3))
-                pred_corr = self._gather_feat(pred_corr, ind)
-                loss_corr = self.loss_corr(pred_corr, target_corr, corr_weights, avg_factor=(num + 1e-4))
-                loss_dict[f'task{task_id}.loss_corr'] = loss_corr
             loss_bbox = self.loss_bbox(
                 pred, target_box, bbox_weights, avg_factor=(num + 1e-4)) # invaid will be masked by the weight
             loss_dict[f'task{task_id}.loss_heatmap'] = loss_heatmap
@@ -820,15 +563,11 @@ class CenterHeadModified(BaseModule):
                 batch_dim,
                 batch_vel,
                 reg=batch_reg,
-                task_id=task_id,
-                corr=preds_dict[0]['corr'] if self.with_correlation else None)#wyc改
+                task_id=task_id,)
             assert self.nms_type in ['circle', 'rotate']
             batch_reg_preds = [box['bboxes'] for box in temp] # B * box
             batch_cls_preds = [box['scores'] for box in temp] # B * score
             batch_cls_labels = [box['labels'] for box in temp] # B * score
-            #wyc改
-            if self.with_correlation:
-                batch_reg_preds = [torch.cat([batch_reg_preds[i], box['corr']], dim=-1)  for i,box in enumerate(temp)]
             if self.nms_type == 'circle':
                 ret_task = []
                 for i in range(batch_size):
@@ -1001,135 +740,250 @@ class CenterHeadModified(BaseModule):
 
 
 @MODELS.register_module()
-class CorrGenerate(BaseModule):
+class CorrGenerateHead(BaseModule):
     def __init__(
         self,
         pc_range,
+        voxel_size,
         n_future_and_present: int = 0,
         label_size: int = 6,
         in_channels: Union[List[int], int] = [128],
         loss_corr: dict = dict(
-                    type='mmdet.GaussianFocalLoss', reduction='mean'),
+            type='mmdet.GaussianFocalLoss', reduction='mean'),
         separate_head: dict = dict(
-                     type='mmdet.SeparateHead',
-                     init_bias=-2.19,
-                     final_kernel=3),
+            type='mmdet.SeparateHead',
+            init_bias=-2.19,
+            final_kernel=3),
         share_conv_channel: int = 64,
         num_heatmap_convs: int = 2,
         conv_cfg: dict = dict(type='Conv2d'),
         norm_cfg: dict = dict(type='BN2d'),
         bias: str = 'auto',
-        init_cfg: Union[dict, List[dict], None] = None,
+        train_cfg: Optional[dict] = None,
+        test_cfg: Optional[dict] = None,
+        init_cfg: Optional[dict] = None,
+        **kwargs
         ):
-        super().__init__(init_cfg=init_cfg)
+        super(CorrGenerateHead, self).__init__(init_cfg=init_cfg, **kwargs)
 
         self.pc_range = pc_range
+        self.voxel_size = voxel_size
+        self.voxel_size = np.array(self.voxel_size).astype(np.float32)
+        self.grid_size = np.array([
+            np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
+            np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
+            np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
+        ]).astype(np.int32)
         self.warper = FeatureWarper(self.pc_range)
         self.add_channels = n_future_and_present * label_size
-
+        self.train_cfg = train_cfg
+        self.test_cfg = test_cfg
         self.in_channels = in_channels
         self.loss_corr = MODELS.build(loss_corr)
 
+        # a shared convolution
         self.shared_conv = ConvModule(
-            in_channels + self.add_channels,
+            in_channels + self.add_channels, # type: ignore
             share_conv_channel,
             kernel_size=3,
             padding=1,
             conv_cfg=conv_cfg,
             norm_cfg=norm_cfg,
             bias=bias)
-        
-        heads = dict(corr_heatmap=(1, num_heatmap_convs))
+
+        heads = dict(heatmap=(1, num_heatmap_convs))
         separate_head.update(
-                in_channels=share_conv_channel, heads=heads, num_cls=1)
+            in_channels=share_conv_channel, heads=heads, num_cls=1)
         self.corr_head = MODELS.build(separate_head)
 
-    def forward(self, feats: Union[List[Tensor], Tensor], targets=None, **kwargs) -> Tuple[List[Tensor]]:
-        """
-        [X C H W]
-        """
-        ret_list = []
-        if targets:
-            _, ego_inputs = self.prepare_ego_labels(targets, **kwargs)
-            b, _, _, h, w = ego_inputs.shape
-            ego_inputs = ego_inputs.view(b, -1, h, w)
-            feats = [torch.cat([feats[0], ego_inputs], dim=1)]
-        feats = self.shared_conv(feats[0])
-        ret_list.append(self.corr_head(feats))
-        return ret_list
+        if self.train_cfg:
+            self.max_objs = int(self.train_cfg['corr_max_objs'] * self.train_cfg['corr_dense_reg'])
+            self.gaussian_overlap = self.train_cfg['corr_gaussian_overlap']
+            self.min_radius = self.train_cfg['corr_min_radius']
 
-    def loss(self, pred_result, gt_corr=None):
+    def forward(self, feats: Union[List[Tensor], Tensor], ego_motion_inputs=None):
+        all_ret_list = []
+        if not ego_motion_inputs:
+            ret_list = []
+            feats = self.shared_conv(feats[0])
+            ret_list.append(self.corr_head(feats))
+            all_ret_list.append(ret_list)
+            return all_ret_list
+        elif not isinstance(ego_motion_inputs, Sequence):
+            ego_motion_inputs = [ego_motion_inputs]
+
         # import pdb;pdb.set_trace()
-        pred_result = pred_result[0]
-        gt_corr_heatmap = gt_corr[0]
-        num_pos = gt_corr[1].sum()
-        loss_dict = dict()
-        pred_result['corr_heatmap'] = clip_sigmoid(pred_result['corr_heatmap'])
-        # num_pos = gt_corr_heatmap.gt(0.3).float().sum().item() #之后需要调整阈值
-        loss_heatmap = self.loss_corr(
-            pred_result['corr_heatmap'], # B c H W
-            gt_corr_heatmap, # type: ignore  B c H W
-            avg_factor=max(num_pos, 1))
-        loss_dict[f'loss_corr_heatmap'] = loss_heatmap
+        
+        for input in ego_motion_inputs:
+            ret_list = []
+            b, _, _, h, w = input.shape
+            input = input.view(b, -1, h, w)
+            new_feats = [torch.cat([feats[0], input], dim=1)]
+            new_feats = self.shared_conv(new_feats[0])
+            ret_list.append(self.corr_head(new_feats))
+            all_ret_list.append(ret_list)
+        
+        return all_ret_list
+
+    def loss_by_feat(self,
+                     preds_list,
+                     heatmaps = None,
+                     loss_names = None,
+                     gt_thres: float = 0.3):
+        assert heatmaps is not None
+        loss_dict = {}
+        names = list(range(len(preds_list)))
+        if loss_names:
+            names = loss_names
+        # import pdb;pdb.set_trace()
+        for name, pred_result, heatmap in zip(names, preds_list, heatmaps):
+            pred_result = pred_result[0]
+            heatmap = heatmap[0] # b, 1, h, w
+            num_pos = heatmap.gt(gt_thres).float().sum().item() # 需要调整
+            pred_result['heatmap'] = clip_sigmoid(pred_result['heatmap'])
+            loss_heatmap = self.loss_corr(
+                pred_result['heatmap'], # B c H W
+                heatmap, # type: ignore  B c H W
+                avg_factor=max(num_pos, 1))
+            loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
         return loss_dict
 
-    def prepare_ego_labels(self, batch, label_sampling_mode='nearest', center_sampling_mode='nearest'):
-        labels = {}
-        ego_motion_inputs = []
-        segmentation_labels = torch.stack(batch['motion_segmentation']) # B, len, H, W
-        instance_center_labels = torch.stack(batch['instance_centerness']) # B, len, H, W
-        instance_offset_labels = torch.stack(batch['instance_offset']) # B, len, 2, H, W
-        instance_flow_labels = torch.stack(batch['instance_flow']) # B, len, 2, H, W
-        gt_instance = torch.stack(batch['motion_instance']) # B, len, H, W
-        future_egomotion = torch.stack(batch['future_egomotion']) # B, len, 4, 4
-        bev_transform = batch.get('aug_transform', None)
+    def prepare_ego_labels(self, batch_list, label_sampling_mode='nearest', center_sampling_mode='nearest'):
+        if not isinstance(batch_list, Sequence):
+            batch_list = [batch_list]
+        return_list = []
+        for batch in batch_list:
+            labels = {}
+            ego_motion_inputs = []
+            segmentation_labels = torch.stack(batch['motion_segmentation']) # B, len, H, W
+            instance_center_labels = torch.stack(batch['instance_centerness']) # B, len, H, W
+            instance_offset_labels = torch.stack(batch['instance_offset']) # B, len, 2, H, W
+            instance_flow_labels = torch.stack(batch['instance_flow']) # B, len, 2, H, W
+            gt_instance = torch.stack(batch['motion_instance']) # B, len, H, W
+            future_egomotion = torch.stack(batch['future_egomotion']) # B, len, 4, 4
+            bev_transform = batch.get('aug_transform', None)
 
-        if bev_transform is not None:
-            bev_transform = bev_transform.float()
+            if bev_transform is not None:
+                bev_transform = bev_transform.float()
 
-        segmentation_labels = self.warper.cumulative_warp_features_reverse(
-            segmentation_labels.float().unsqueeze(2), # B, len, 1, H, W
-            future_egomotion,
-            mode=label_sampling_mode, bev_transform=bev_transform,
-        ).long().contiguous() # to long(0 or 1)
-        labels['segmentation'] = segmentation_labels  # B, len, 1, H, W
-        ego_motion_inputs.append(segmentation_labels)
+            segmentation_labels = self.warper.cumulative_warp_features_reverse(
+                segmentation_labels.float().unsqueeze(2), # B, len, 1, H, W
+                future_egomotion,
+                mode=label_sampling_mode, bev_transform=bev_transform,
+            ).long().contiguous() # to long(0 or 1)
+            labels['segmentation'] = segmentation_labels  # B, len, 1, H, W
+            ego_motion_inputs.append(segmentation_labels)
 
-        # Warp instance labels to present's reference frame
-        gt_instance = self.warper.cumulative_warp_features_reverse(
-            gt_instance.float().unsqueeze(2), # B, len, 1, H, W
-            future_egomotion,
-            mode=label_sampling_mode, bev_transform=bev_transform,
-        ).long().contiguous()[:, :, 0] # to long(0, 1~254, 255) # B, len, H, W
-        labels['instance'] = gt_instance
+            # Warp instance labels to present's reference frame
+            gt_instance = self.warper.cumulative_warp_features_reverse(
+                gt_instance.float().unsqueeze(2), # B, len, 1, H, W
+                future_egomotion,
+                mode=label_sampling_mode, bev_transform=bev_transform,
+            ).long().contiguous()[:, :, 0] # to long(0, 1~254, 255) # B, len, H, W
+            labels['instance'] = gt_instance
 
-        instance_center_labels = self.warper.cumulative_warp_features_reverse(
-            instance_center_labels,
-            future_egomotion,
-            mode=center_sampling_mode, bev_transform=bev_transform,
-        ).contiguous()
-        labels['centerness'] = instance_center_labels # B, len, 1, H, W
+            instance_center_labels = self.warper.cumulative_warp_features_reverse(
+                instance_center_labels,
+                future_egomotion,
+                mode=center_sampling_mode, bev_transform=bev_transform,
+            ).contiguous()
+            labels['centerness'] = instance_center_labels # B, len, 1, H, W
 
-        instance_offset_labels = self.warper.cumulative_warp_features_reverse(
-            instance_offset_labels,
-            future_egomotion,
-            mode=label_sampling_mode, bev_transform=bev_transform,
-        ).contiguous()
-        labels['offset'] = instance_offset_labels # B, len, 2, H, W
+            instance_offset_labels = self.warper.cumulative_warp_features_reverse(
+                instance_offset_labels,
+                future_egomotion,
+                mode=label_sampling_mode, bev_transform=bev_transform,
+            ).contiguous()
+            labels['offset'] = instance_offset_labels # B, len, 2, H, W
 
-        ego_motion_inputs.append(instance_center_labels)
-        ego_motion_inputs.append(instance_offset_labels)
+            ego_motion_inputs.append(instance_center_labels)
+            ego_motion_inputs.append(instance_offset_labels)
 
-        instance_flow_labels = self.warper.cumulative_warp_features_reverse(
-            instance_flow_labels,
-            future_egomotion,
-            mode=label_sampling_mode, bev_transform=bev_transform,
-        ).contiguous()
-        labels['flow'] = instance_flow_labels # B, len, 2, H, W
-        ego_motion_inputs.append(instance_flow_labels)
+            instance_flow_labels = self.warper.cumulative_warp_features_reverse(
+                instance_flow_labels,
+                future_egomotion,
+                mode=label_sampling_mode, bev_transform=bev_transform,
+            ).contiguous()
+            labels['flow'] = instance_flow_labels # B, len, 2, H, W
+            ego_motion_inputs.append(instance_flow_labels)
 
-        if len(ego_motion_inputs) > 0:
-            ego_motion_inputs = torch.cat(
-                ego_motion_inputs, dim=2) #  # B, len, 1+1+2+2, H, W
+            if len(ego_motion_inputs) > 0:
+                ego_motion_inputs = torch.cat(
+                    ego_motion_inputs, dim=2) #  # B, len, 1+1+2+2, H, W
+            
+            return_list.append((labels, ego_motion_inputs)) # dict tensor B len 1+1+2+2 256, 256
 
-        return labels, ego_motion_inputs # dict tensor B len 1+1+2+2 256, 256
+        return_list = tuple(map(list, zip(*return_list)))
+        return return_list
+
+    def get_corr_heatmaps(
+        self,
+        batch_instances: List[InstanceData],
+    ) -> Tuple[List[Tensor]]:
+        heatmaps = multi_apply(self.get_corr_single, batch_instances)
+        heatmaps = [torch.stack(corr_) for corr_ in heatmaps]
+        return heatmaps # [task1, task2, task3, ...]
+
+    def get_corr_single(self, gt_instances_3d):
+        assert 'correlation' in gt_instances_3d
+        correlation = gt_instances_3d.correlation
+        gt_bboxes_3d = gt_instances_3d.bboxes_3d
+        device = gt_bboxes_3d.device
+        gt_bboxes_3d = torch.cat( # get gravity center box
+            (gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]),
+            dim=1).to(device)
+        
+        draw_gaussian = draw_heatmap_gaussian
+        heatmaps = []
+        task_len = correlation.shape[-1]
+        num_objs = min(gt_bboxes_3d.shape[0], self.max_objs)
+        for idx in range(task_len):
+            heatmap = gt_bboxes_3d.new_zeros((
+                1,
+                self.grid_size[0],
+                self.grid_size[1]
+            )) # type: ignore
+            corr = correlation[:, idx]
+            for k in range(num_objs):
+                score = corr[k]
+                length = gt_bboxes_3d[k][3] / self.voxel_size[0]
+                width = gt_bboxes_3d[k][4] / self.voxel_size[1]
+
+                if width > 0 and length > 0:
+                    radius = gaussian_radius(
+                        (width, length),
+                        min_overlap=self.gaussian_overlap)
+                    radius = max(self.min_radius, int(radius))
+
+                    # be really careful for the coordinate system of
+                    # your box annotation.
+                    x, y, z = gt_bboxes_3d[k][0], gt_bboxes_3d[k][1], gt_bboxes_3d[k][2]
+
+                    coor_x = (
+                        x - self.pc_range[0]
+                    ) / self.voxel_size[0]
+                    coor_y = (
+                        y - self.pc_range[1]
+                    ) / self.voxel_size[1]
+
+                    center = torch.tensor([coor_x, coor_y],
+                                        dtype=torch.float32,
+                                        device=device)
+                    center_int = center.to(torch.int32)
+
+                    # throw out not in range objects to avoid out of array
+                    # area when creating the heatmap
+                    if not (0 <= center_int[0] < self.grid_size[1]
+                            and 0 <= center_int[1] < self.grid_size[0]):
+                        continue
+
+                    draw_gaussian(heatmap[0], center_int, radius, k=score)
+
+                    x, y = center_int[0], center_int[1]
+                    assert (y * self.grid_size[1] + x < self.grid_size[1] * self.grid_size[0])
+            heatmaps.append(heatmap)
+        return heatmaps
+
+
+
+

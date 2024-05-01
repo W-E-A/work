@@ -17,18 +17,17 @@ from mmengine.logging import print_log
 import logging
 def log(msg = "" ,level: int = logging.INFO):
     print_log(msg, "current", level)
-import time
 from ..utils import calc_relative_pose, convert_instance_mask_to_center_and_offset_label
 
 ### Transform Template ###
 
 # @TRANSFORMS.register_module()
-# class AddPoseNoise(BaseTransform):
+# class NoOps(BaseTransform):
 #     def __init__(self, *args, **kwargs) -> None:
 #         super().__init__(*args, **kwargs)
 
-#     def transform(self, results: Dict) -> Union[Dict,Tuple[List, List],None]:
-#         return None
+#     def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
+#         return input_dict
 
 
 ### Single Agent Pipline ###
@@ -114,14 +113,15 @@ class LoadAnnotations3DV2X(LoadAnnotations3D):
 
 @TRANSFORMS.register_module()
 class ConstructEGOBox(BaseTransform):
-    def __init__(self, ego_id: int = -100) -> None:
+    def __init__(self, ego_id: int = -100, infrastructure_name: str = 'infrastructure') -> None:
         self.ego_id = ego_id
+        self.infrastructure_name = infrastructure_name
 
     def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
         gt_bboxes_3d = input_dict['gt_bboxes_3d']
         track_id = input_dict['track_id']
         ego_box = gt_bboxes_3d.tensor[track_id == self.ego_id]
-        if ego_box.shape[0] != 1 and input_dict['agent'] != 'infrastructure':
+        if ego_box.shape[0] != 1 and input_dict['agent'] != self.infrastructure_name:
             box_type_3d = input_dict['box_type_3d']
             box_mode_3d = input_dict['box_mode_3d']
             ego_height = gt_bboxes_3d.tensor[0, 2]
@@ -382,205 +382,9 @@ class GatherV2XPoseInfo(BaseTransform):
 
 
 @TRANSFORMS.register_module()
-class MakeMotionLabels(BaseTransform):
-
-
-    def __init__(self,
-        pc_range,
-        voxel_size,
-        corr_pc_range = None,
-        corr_voxel_size = None,
-        ego_id: int = -100,
-        only_vehicle: bool = False,
-        vehicle_id_list: list = [0, 1, 2],
-        filter_invalid: bool = True,
-        ignore_index:int = 255,
-        ) -> None:
-
-        self.pc_range = pc_range
-        self.voxel_size = voxel_size
-        self.voxel_size = np.array(self.voxel_size).astype(np.float32)
-        self.grid_size = np.array([
-            np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
-            np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
-            np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
-        ]).astype(np.int32)
-        self.offset_xy = np.array([
-            self.pc_range[0] + self.voxel_size[0] * 0.5,
-            self.pc_range[1] + self.voxel_size[1] * 0.5
-        ]).astype(np.float32)
-        self.warp_size = (0.5 * (self.pc_range[3] - self.pc_range[0]), 0.5 * (self.pc_range[4] - self.pc_range[1]))
-
-        self.corr_enable = False
-        if (corr_pc_range is not None and corr_voxel_size is not None):
-            self.corr_enable = True
-            self.corr_pc_range = corr_pc_range
-            self.corr_voxel_size = corr_voxel_size
-            self.corr_voxel_size = np.array(self.corr_voxel_size).astype(np.float32)
-            self.corr_grid_size = np.array([
-                np.round((self.corr_pc_range[4] - self.corr_pc_range[1]) / self.corr_voxel_size[1]), # H
-                np.round((self.corr_pc_range[3] - self.corr_pc_range[0]) / self.corr_voxel_size[0]), # W
-                np.round((self.corr_pc_range[5] - self.corr_pc_range[2]) / self.corr_voxel_size[2]), # D
-            ]).astype(np.int32)
-            self.corr_offset_xy = np.array([
-                self.corr_pc_range[0] + self.corr_voxel_size[0] * 0.5,
-                self.corr_pc_range[1] + self.corr_voxel_size[1] * 0.5
-            ]).astype(np.float32)
-            self.corr_warp_size = (0.5 * (self.corr_pc_range[3] - self.corr_pc_range[0]), 0.5 * (self.corr_pc_range[4] - self.corr_pc_range[1]))
-
-        self.ego_id = ego_id
-        self.only_vehicle = only_vehicle
-        self.vehicle_id_list = vehicle_id_list
-        self.filter_invalid = filter_invalid
-        self.ignore_index = ignore_index
-
-    def transform(self, input_dict) -> Union[Dict,Tuple[List, List],None]:
-        sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
-        sample_interval = input_dict['sample_interval'] # 序列采集间隔
-        present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
-        seq_length = input_dict['seq_length'] # 当前序列长度，比如6
-        scene_name = input_dict['scene_name'] # 序列所属场景
-        seq_timestamps = input_dict['seq_timestamps'] # 序列时间戳
-        co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
-        example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
-        future_seq_position = range(seq_length)[present_idx:] # 取出未来帧在序列中的位置， 比如3, 4, 5
-        future_length = len(future_seq_position) # 表明未来帧的长度，比如3
-        future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
-        # future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
-        # future_loc_matrix = input_dict['loc_matrix'][present_idx:, :, ...] # c x 4 4 # 未来帧ego的实际位置
-        future_motion_rela_matrix = input_dict['future_motion_rela_matrix'] # c x 4 4 未来帧对于前一帧的位姿关系
-
-        inf_idx = co_agents.index('infrastructure')
-        inf_motion_rela_matrix = future_motion_rela_matrix[inf_idx]
-
-        for j, agent in enumerate(co_agents):
-            
-            track_map = {}
-            segmentations = []
-            instances = []
-            for i, timestamp in enumerate(future_seq_position):
-                gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
-
-                if gt_instances_3d.bboxes_3d is None:
-                    segmentation = np.ones(
-                        (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
-                    instance = np.ones_like(segmentation) * self.ignore_index
-                else:
-                    segmentation = np.zeros((self.grid_size[0], self.grid_size[1])) # H, W
-                    instance = np.zeros_like(segmentation)    
-
-                if self.only_vehicle:
-                    vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
-                    gt_instances_3d = gt_instances_3d[vehicle_mask]
-                
-                if agent != 'infrastructure':
-                    ego_mask = gt_instances_3d.track_id != self.ego_id
-                    gt_instances_3d = gt_instances_3d[ego_mask]
-                
-                if self.filter_invalid:
-                    gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid]
-
-                bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
-                bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
-
-                for index, id in enumerate(gt_instances_3d.track_id):
-                    if id not in track_map:
-                        track_map[id] = len(track_map) + 1
-                    instance_id = track_map[id]
-                    poly_region = bbox_corners_voxel[index]
-                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
-                    cv2.fillPoly(instance, [poly_region], instance_id) # 实例分割为0~254
-
-                segmentations.append(segmentation)
-                instances.append(instance)
-
-            segmentations = np.stack(segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
-            instances = np.stack(instances, axis=0).astype(np.int32) # [fu_len, H, W]
-
-            instance_centerness, instance_offset, instance_flow = convert_instance_mask_to_center_and_offset_label(
-                instances,
-                future_motion_rela_matrix[j],
-                len(track_map),
-                ignore_index = self.ignore_index,
-                spatial_extent = self.warp_size,
-            ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
-
-            # 如果分割有任何是没有box的则清除中心度为ignore
-            invalid_mask = (segmentations[:, 0, 0] == self.ignore_index)
-            instance_centerness[invalid_mask] = self.ignore_index
-            motion_label = {
-                'motion_segmentation': torch.from_numpy(segmentations).float(), # [fu_len, H, W]
-                'motion_instance': torch.from_numpy(instances).float(), # [fu_len, H, W]
-                'instance_centerness': torch.from_numpy(instance_centerness).float(), # len, 1, h, w
-                'instance_offset': torch.from_numpy(instance_offset).float(), # len, 2, h, w
-                'instance_flow': torch.from_numpy(instance_flow).float(), # len, 2, h, w invalid at last
-                'future_egomotion': torch.from_numpy(future_motion_rela_matrix[j]) # len, 4, 4 ident at 0
-            }
-            input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
-
-            if agent != 'infrastructure' and self.corr_enable:
-                ego_segmentations = []
-                ego_instances = []
-                for i, timestamp in enumerate(future_seq_position):
-                    gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
-                    ego_mask = gt_instances_3d.track_id == self.ego_id
-                    gt_instances_3d = gt_instances_3d[ego_mask]
-                    assert len(gt_instances_3d) == 1 # ego only, must construct the ego bbox
-
-                    if gt_instances_3d.bboxes_3d is None:
-                        segmentation = np.ones(
-                            (self.corr_grid_size[0], self.corr_grid_size[1])) * self.ignore_index # H, W
-                        instance = np.ones_like(segmentation) * self.ignore_index
-                    else:
-                        segmentation = np.zeros((self.corr_grid_size[0], self.corr_grid_size[1])) # H, W
-                        instance = np.zeros_like(segmentation)
-
-                    trans = future_pose_matrix[i, inf_idx, j, ...] # 4, 4
-                    gt_instances_3d.bboxes_3d.rotate(trans[:3, :3].T, None)
-                    gt_instances_3d.bboxes_3d.translate(trans[:3, 3])
-                    bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
-                    bbox_corners_voxel = np.round((bbox_corners - self.corr_offset_xy) / self.corr_voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
-
-                    poly_region = bbox_corners_voxel[0]
-                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
-                    cv2.fillPoly(instance, [poly_region], 1) # ego only so 1
-                        
-                    ego_segmentations.append(segmentation)
-                    ego_instances.append(instance)
-
-                ego_segmentations = np.stack(ego_segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
-                ego_instances = np.stack(ego_instances, axis=0).astype(np.int32) # [fu_len, H, W]
-                
-                ego_instance_centerness, ego_instance_offset, ego_instance_flow = convert_instance_mask_to_center_and_offset_label(
-                    ego_instances,
-                    inf_motion_rela_matrix,
-                    1, # ego only
-                    ignore_index = self.ignore_index,
-                    spatial_extent = self.corr_warp_size,
-                ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
-
-                # 如果分割有任何是没有box的则清除中心度为ignore
-                invalid_mask = (ego_segmentations[:, 0, 0] == self.ignore_index)
-                ego_instance_centerness[invalid_mask] = self.ignore_index
-                ego_motion_label = {
-                    'motion_segmentation': torch.from_numpy(ego_segmentations).float(), # [fu_len, H, W]
-                    'motion_instance': torch.from_numpy(ego_instances).float(), # [fu_len, H, W]
-                    'instance_centerness': torch.from_numpy(ego_instance_centerness).float(), # len, 1, h, w
-                    'instance_offset': torch.from_numpy(ego_instance_offset).float(), # len, 2, h, w
-                    'instance_flow': torch.from_numpy(ego_instance_flow).float(), # len, 2, h, w invalid at last
-                    'future_egomotion': torch.from_numpy(inf_motion_rela_matrix), # len, 4, 4 ident at 0
-                    # 'future_pose_matrix': torch.from_numpy(future_pose_matrix[:, inf_idx, j, ...]) # len, 4, 4 ego to infrastructure
-                }
-                input_dict['example_seq'][present_idx][j]['ego_motion_label'] = ego_motion_label
-                # print(input_dict['example_seq'][present_idx][j].keys())
-        return input_dict
-
-
-@TRANSFORMS.register_module()
 class CorrelationFilter(BaseTransform):
-
     def __init__(self,
-        ego_name: str = 'ego_vehicle',
+        infrastructure_name: str = 'infrastructure',
         with_velocity: bool = True,
         only_vehicle: bool = False,
         vehicle_id_list: list = [0, 1, 2],
@@ -595,7 +399,7 @@ class CorrelationFilter(BaseTransform):
         increment_save: bool = True,
         verbose: bool = False
     ) -> None:
-        self.ego_name = ego_name
+        self.infrastructure_name = infrastructure_name
         self.with_velocity = with_velocity
         self.only_vehicle = only_vehicle
         self.vehicle_id_list = vehicle_id_list
@@ -651,7 +455,6 @@ class CorrelationFilter(BaseTransform):
         target_center: np.ndarray, # 2,
         target_vel: np.ndarray, # 2,
         target_label,
-        min_distance_thres: float,
         beta_coeff: float, 
         gamma_coeff: float,
         weight = [1, 1, 1, 1, 1, 1, ]
@@ -663,7 +466,7 @@ class CorrelationFilter(BaseTransform):
             
         rela_vector = ego_center - target_center
         rela_vector_norm = np.linalg.norm(rela_vector, ord=2)
-        rela_vector_norm = np.clip(rela_vector_norm, min_distance_thres, np.inf)
+        rela_vector_norm = np.clip(rela_vector_norm, 1e-1, np.inf)
         rela_vel = target_vel - ego_vel
         rela_vel_norm = np.linalg.norm(rela_vel, ord=2)
         rela_vel_norm = np.clip(rela_vel_norm, 1e-6, np.inf)
@@ -673,6 +476,239 @@ class CorrelationFilter(BaseTransform):
         p_score = sigmoid(potential) - 0.5
         return potential, p_score
 
+    def transform(self, input_dict) -> Union[Dict,Tuple[List, List],None]:
+        sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
+        sample_interval = input_dict['sample_interval'] # 序列采集间隔
+        present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
+        seq_length = input_dict['seq_length'] # 当前序列长度，比如6
+        scene_name = input_dict['scene_name'] # 序列所属场景
+        seq_timestamps = input_dict['seq_timestamps'] # 序列时间戳
+        co_agents = input_dict['co_agents'] # 参与协同的代理名称
+        example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
+        future_seq_position = range(seq_length)[present_idx:] # 取出未来帧在序列中的位置， 比如3, 4, 5
+        future_length = len(future_seq_position) # 表明未来帧的长度，比如3
+        future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
+        future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
+        future_loc_matrix = input_dict['loc_matrix'][present_idx:, :, ...] # x c 4 4 # 未来帧ego的实际位置
+
+        if self.verbose:
+            log(scene_name)
+            log(seq_timestamps)
+
+        assert self.infrastructure_name in co_agents
+        infrastructure_idx = co_agents.index(self.infrastructure_name)
+        # 如果处理的是路侧，则对于路侧在时序上跟踪所有目标，相对于关键帧的轨迹，路侧得到一个track_map
+        track_map = {}
+        for i, timestamp in enumerate(future_seq_position):
+            gt_instances_3d = example_seq[timestamp][infrastructure_idx]['data_samples'].gt_instances_3d.clone()
+
+            if self.only_vehicle:
+                vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
+                gt_instances_3d = gt_instances_3d[vehicle_mask]
+
+            # gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target bug do not modify
+
+            lidar2agent = np.array(example_seq[timestamp][infrastructure_idx]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) # type: ignore
+            agent2present = future_motion_matrix[infrastructure_idx][i]
+            lidar2present = lidar2agent @ agent2present
+            gt_instances_3d.bboxes_3d.rotate(lidar2present[:3, :3].T, None)
+            gt_instances_3d.bboxes_3d.translate(lidar2present[:3, 3]) # valid boxes to present
+            
+            for idx, id in enumerate(gt_instances_3d.track_id):
+                bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # present坐标系下其他目标的present的中心
+                bboxes_vel = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[-2:] # present velocity
+                label = gt_instances_3d.labels_3d[idx]
+                if id not in track_map:
+                    track_map[id] = {
+                        # 'color': self.cmaps[np.random.randint(0, len(self.cmaps))],
+                        # 'color': self.cmaps[label],
+                        'label': label,
+                        'center': [],
+                        'vel': [],
+                        'start': i
+                    }
+                track_map[id]['center'].append(bboxes_xy)
+                if self.with_velocity:
+                    track_map[id]['vel'].append(bboxes_vel)
+
+        correlation_list = []
+        for j, agent in enumerate(co_agents):
+            if agent != self.infrastructure_name: # 除了infrastructure之外的每个车分别都是ego
+                # 如果处理的是ego则先得到ego的规划轨迹和关键帧相对于其他协同对象的变换矩阵
+                ego_motion_matrix = future_motion_matrix[j] # x 4 4 rela to present
+                trans = future_pose_matrix[0, infrastructure_idx, j] # c 4 4
+                if self.with_velocity:
+                    ego_present_vel = np.array(
+                        [example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_x'],
+                         example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_y']],
+                         dtype=np.float32
+                    )
+                    if self.verbose:
+                        log(f"ego : {ego_present_vel}")
+
+                # 对于每个协同代理的视角下，将ego的规划轨迹转到协同代理的当前坐标系下
+                present_instances_3d = example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d
+                rela_matrix = np.stack([trans @ ego_motion_matrix[k] for k in range(future_length)], axis=0) # type: ignore
+                rela_centers = rela_matrix[:, :2, 3] # x 2
+                if self.with_velocity:
+                    rots = np.linalg.inv(future_loc_matrix[0, infrastructure_idx, ...])[:2, :2]# 每个ego速度对于世界，所以转到对于present的代理描述下
+                    rela_vel = ego_present_vel @ rots.T # 转置乘法
+
+                if self.visualizer:
+                    self.visualizer.set_points_from_npz(example_seq[present_idx][infrastructure_idx]['data_samples'].metainfo["lidar_path"])
+                
+                # 对于每个协同代理的检测结果（这里是真值），计算其和ego轨迹的关系
+                result_dict = {}
+                if self.with_velocity:
+                    potential_dict = {}
+                for id, v in track_map.items():
+                    # 对于每一条轨迹
+                    # color = v['color'] # 类型颜色
+                    start = v['start'] # 开始跟踪的时间戳
+                    centers = np.stack(v['center'], axis=0) # N, 2 # 轨迹中心点
+                    cmp_centers = rela_centers[start:start + len(centers)] # N, 2 这里保证ego是从头开始的，因此在有效预测目标轨迹的时间段对比
+                    correlation_score = 0
+                    motion_score = self.linear_motion_score(
+                        cmp_centers, centers, self.min_distance_thres, self.max_distance_thres, self.alpha_coeff
+                    )
+                    if self.with_velocity:
+                        p_score = 0
+                        if start == 0: # 忽略当前之后再出现的目标的速度
+                            vel = v['vel'][start]
+                            label = v['label']
+                            if self.verbose:
+                                log(f"{id} : {vel}")
+                            potential, p_score = self.potential_score(
+                                cmp_centers[0],
+                                rela_vel,
+                                centers[0],
+                                vel,
+                                label,
+                                self.beta_coeff,
+                                self.gamma_coeff
+                            )
+                            correlation_score = motion_score * 0.5 + p_score
+                    else:
+                        correlation_score = motion_score
+                    result_dict[id] = correlation_score
+                    if self.with_velocity:
+                        potential_dict[id] = p_score # potential
+
+                    if self.visualizer:
+                        if self.with_velocity and start == 0:
+                            vel_vector = np.stack([centers[0], centers[0] + sample_interval * 0.1 * vel]) # 2, 2
+                            self.visualizer.draw_arrows(vel_vector, fc = 'r', ec = 'r', width = 6, head_width = 12, head_length = 10)
+                        self.visualizer.draw_points(centers, colors=np.linspace(0.0, 1.0, len(centers))[::-1], sizes = 40, cmap='Greens')
+                
+                # import pdb
+                # pdb.set_trace()
+                correlation_scores = np.array([result_dict[id] if id in result_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
+                potentials = np.array([potential_dict[id] if id in potential_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
+                
+                correlation_list.append(torch.tensor(correlation_scores, dtype=torch.float32))
+
+                if self.visualizer:
+                    self.visualizer.draw_points(rela_centers, colors=np.linspace(0.0, 1.0, future_length)[::-1], sizes = 80, cmap='Blues')
+                    if self.with_velocity:
+                        rela_vel_vector = np.stack([rela_centers[0], rela_centers[0] + sample_interval * 0.1 * rela_vel])
+                        self.visualizer.draw_arrows(rela_vel_vector, fc = 'm', ec = 'm', width = 6, head_width = 12, head_length = 10)
+                    self.visualizer.draw_bev_bboxes(present_instances_3d.bboxes_3d, c='#FF8000')
+                    correlation_scores_str = [f"{s:.2f}" for s in list(correlation_scores)]
+                    self.visualizer.draw_texts(
+                        correlation_scores_str,
+                        present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                        font_sizes = 12,
+                        colors = '#FFFF00',
+                        vertical_alignments = 'top',
+                        horizontal_alignments = 'left')
+                    potentials_str = [f"{s:.2f}" for s in list(potentials)]
+                    self.visualizer.draw_texts(
+                        potentials_str,
+                        present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                        font_sizes = 12,
+                        colors = '#00FFFF',
+                        vertical_alignments = 'top',
+                        horizontal_alignments = 'right')
+                    self.visualizer.draw_texts(
+                        present_instances_3d.track_id.tolist(),
+                        present_instances_3d.bboxes_3d.gravity_center[..., :2],
+                        font_sizes = 12,
+                        colors = '#FF00FF',
+                        vertical_alignments = 'bottom',
+                        horizontal_alignments = 'right')
+
+                    if self.verbose:
+                        log(result_dict)
+                        log(correlation_scores)
+                        log(agent)
+                    if self.increment_save:
+                        save_path = os.path.join(self.just_save_root, f"{agent}")
+                        os.makedirs(save_path, exist_ok=True)
+                        self.visualizer.just_save(os.path.join(save_path, f"{sample_idx}.png"))
+                    else:
+                        save_path = os.path.join(self.just_save_root, f"{agent}")
+                        os.makedirs(save_path, exist_ok=True)
+                        self.visualizer.just_save(os.path.join(save_path, f"{sample_idx}.png"))
+                    self.visualizer.clean()
+        
+        correlation_list = torch.stack(correlation_list, dim=1) # N, x
+        example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d['correlation'] = correlation_list
+        
+        return input_dict
+
+
+@TRANSFORMS.register_module()
+class MakeMotionLabels(BaseTransform):
+    def __init__(self,
+        pc_range,
+        voxel_size,
+        infrastructure_name: str = 'infrastructure',
+        corr_pc_range = None,
+        corr_voxel_size = None,
+        ego_id: int = -100,
+        only_vehicle: bool = False,
+        vehicle_id_list: list = [0, 1, 2],
+        filter_invalid: bool = True,
+        ignore_index:int = 255,
+        ) -> None:
+
+        self.pc_range = pc_range
+        self.voxel_size = voxel_size
+        self.voxel_size = np.array(self.voxel_size).astype(np.float32)
+        self.grid_size = np.array([
+            np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
+            np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
+            np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
+        ]).astype(np.int32)
+        self.offset_xy = np.array([
+            self.pc_range[0] + self.voxel_size[0] * 0.5,
+            self.pc_range[1] + self.voxel_size[1] * 0.5
+        ]).astype(np.float32)
+        self.warp_size = (0.5 * (self.pc_range[3] - self.pc_range[0]), 0.5 * (self.pc_range[4] - self.pc_range[1]))
+
+        self.corr_enable = False
+        if (corr_pc_range is not None and corr_voxel_size is not None):
+            self.corr_enable = True
+            self.corr_pc_range = corr_pc_range
+            self.corr_voxel_size = corr_voxel_size
+            self.corr_voxel_size = np.array(self.corr_voxel_size).astype(np.float32)
+            self.corr_grid_size = np.array([
+                np.round((self.corr_pc_range[4] - self.corr_pc_range[1]) / self.corr_voxel_size[1]), # H
+                np.round((self.corr_pc_range[3] - self.corr_pc_range[0]) / self.corr_voxel_size[0]), # W
+                np.round((self.corr_pc_range[5] - self.corr_pc_range[2]) / self.corr_voxel_size[2]), # D
+            ]).astype(np.int32)
+            self.corr_offset_xy = np.array([
+                self.corr_pc_range[0] + self.corr_voxel_size[0] * 0.5,
+                self.corr_pc_range[1] + self.corr_voxel_size[1] * 0.5
+            ]).astype(np.float32)
+            self.corr_warp_size = (0.5 * (self.corr_pc_range[3] - self.corr_pc_range[0]), 0.5 * (self.corr_pc_range[4] - self.corr_pc_range[1]))
+
+        self.infrastructure_name = infrastructure_name
+        self.ego_id = ego_id
+        self.only_vehicle = only_vehicle
+        self.vehicle_id_list = vehicle_id_list
+        self.filter_invalid = filter_invalid
+        self.ignore_index = ignore_index
 
     def transform(self, input_dict) -> Union[Dict,Tuple[List, List],None]:
         sample_idx = input_dict['sample_idx'] # 采样序列的唯一ID
@@ -686,182 +722,130 @@ class CorrelationFilter(BaseTransform):
         future_seq_position = range(seq_length)[present_idx:] # 取出未来帧在序列中的位置， 比如3, 4, 5
         future_length = len(future_seq_position) # 表明未来帧的长度，比如3
         future_pose_matrix = input_dict['pose_matrix'][present_idx:, ...] # x c c 4 4 # 未来帧的每帧变换关系
-        future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
-        future_loc_matrix = input_dict['loc_matrix'][present_idx:, :, ...] # c x 4 4 # 未来帧ego的实际位置
+        # future_motion_matrix = input_dict['future_motion_matrix'] # c x 4 4 未来帧相对于起始帧的位姿关系
+        # future_loc_matrix = input_dict['loc_matrix'][present_idx:, :, ...] # c x 4 4 # 未来帧ego的实际位置
+        future_motion_rela_matrix = input_dict['future_motion_rela_matrix'] # c x 4 4 未来帧对于前一帧的位姿关系
 
-        if self.verbose:
-            log(scene_name)
-            log(seq_timestamps)
+        assert self.infrastructure_name in co_agents
+        infrastructure_idx = co_agents.index(self.infrastructure_name)
+        inf_motion_rela_matrix = future_motion_rela_matrix[infrastructure_idx]
 
-        co_agents = {v : k for k, v in enumerate(co_agents)} # str : int
-        assert self.ego_name in co_agents and self.ego_name != 'infrastructure'
-        track_map_list = []
-        for agent, j in co_agents.items():
-            if agent == self.ego_name:
-                # 如果处理的是ego则先得到ego的规划轨迹和关键帧相对于其他协同对象的变换矩阵
-                ego_motion_matrix = future_motion_matrix[j] # x 4 4 rela to present
-                present_trans_matrix = future_pose_matrix[0, :, j] # c 4 4
-                present_trans_matrix = np.delete(present_trans_matrix, j, axis=0) # ego to [ego, other, ...] at present c-1 4 4
-                if self.with_velocity:
-                    ego_present_vel = np.array(
-                        [example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_x'],
-                         example_seq[present_idx][j]['data_samples'].metainfo['vehicle_speed_y']],
-                         dtype=np.float32
-                    )
-                    if self.verbose:
-                        log(f"ego : {ego_present_vel}")
-            else:
-                # 如果处理的是协同代理，则对于每个代理在时序上跟踪所有目标，相对于关键帧的轨迹，每个代理得到一个track_map
-                track_map = {}
+        for j, agent in enumerate(co_agents):
+            
+            track_map = {}
+            segmentations = []
+            instances = []
+            for i, timestamp in enumerate(future_seq_position):
+                gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
+
+                if gt_instances_3d.bboxes_3d is None:
+                    segmentation = np.ones(
+                        (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
+                    instance = np.ones_like(segmentation) * self.ignore_index
+                else:
+                    segmentation = np.zeros((self.grid_size[0], self.grid_size[1])) # H, W
+                    instance = np.zeros_like(segmentation)    
+
+                if self.only_vehicle:
+                    vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
+                    gt_instances_3d = gt_instances_3d[vehicle_mask]
+                
+                if self.filter_invalid:
+                    gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid]
+
+                bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
+                bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
+
+                for index, id in enumerate(gt_instances_3d.track_id):
+                    if id not in track_map:
+                        track_map[id] = len(track_map) + 1
+                    instance_id = track_map[id]
+                    poly_region = bbox_corners_voxel[index]
+                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
+                    cv2.fillPoly(instance, [poly_region], instance_id) # 实例分割为0~254
+
+                segmentations.append(segmentation)
+                instances.append(instance)
+
+            segmentations = np.stack(segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
+            instances = np.stack(instances, axis=0).astype(np.int32) # [fu_len, H, W]
+
+            instance_centerness, instance_offset, instance_flow = convert_instance_mask_to_center_and_offset_label(
+                instances,
+                future_motion_rela_matrix[j],
+                len(track_map),
+                ignore_index = self.ignore_index,
+                spatial_extent = self.warp_size,
+            ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
+
+            # 如果分割有任何是没有box的则清除中心度为ignore
+            invalid_mask = (segmentations[:, 0, 0] == self.ignore_index)
+            instance_centerness[invalid_mask] = self.ignore_index
+            motion_label = {
+                'motion_segmentation': torch.from_numpy(segmentations).float(), # [fu_len, H, W]
+                'motion_instance': torch.from_numpy(instances).float(), # [fu_len, H, W]
+                'instance_centerness': torch.from_numpy(instance_centerness).float(), # len, 1, h, w
+                'instance_offset': torch.from_numpy(instance_offset).float(), # len, 2, h, w
+                'instance_flow': torch.from_numpy(instance_flow).float(), # len, 2, h, w invalid at last
+                'future_egomotion': torch.from_numpy(future_motion_rela_matrix[j]) # len, 4, 4 ident at 0
+            }
+            input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
+
+            if agent != self.infrastructure_name and self.corr_enable:
+                ego_segmentations = []
+                ego_instances = []
                 for i, timestamp in enumerate(future_seq_position):
                     gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
+                    ego_mask = gt_instances_3d.track_id == self.ego_id
+                    gt_instances_3d = gt_instances_3d[ego_mask]
+                    assert len(gt_instances_3d) == 1 # ego only, must construct the ego bbox
 
-                    if self.only_vehicle:
-                        vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
-                        gt_instances_3d = gt_instances_3d[vehicle_mask]
-                    
-                    if agent != 'infrastructure':
-                        ego_mask = gt_instances_3d.track_id != self.ego_id
-                        gt_instances_3d = gt_instances_3d[ego_mask]
+                    if gt_instances_3d.bboxes_3d is None:
+                        segmentation = np.ones(
+                            (self.corr_grid_size[0], self.corr_grid_size[1])) * self.ignore_index # H, W
+                        instance = np.ones_like(segmentation) * self.ignore_index
+                    else:
+                        segmentation = np.zeros((self.corr_grid_size[0], self.corr_grid_size[1])) # H, W
+                        instance = np.zeros_like(segmentation)
 
-                    # gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target bug do not modify
+                    trans = future_pose_matrix[i, infrastructure_idx, j, ...] # 4, 4
+                    gt_instances_3d.bboxes_3d.rotate(trans[:3, :3].T, None)
+                    gt_instances_3d.bboxes_3d.translate(trans[:3, 3])
+                    bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
+                    bbox_corners_voxel = np.round((bbox_corners - self.corr_offset_xy) / self.corr_voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
 
-                    lidar2agent = np.array(example_seq[timestamp][j]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) # type: ignore
-                    agent2present = future_motion_matrix[j][i]
-                    lidar2present = lidar2agent @ agent2present
-                    gt_instances_3d.bboxes_3d.rotate(lidar2present[:3, :3].T, None)
-                    gt_instances_3d.bboxes_3d.translate(lidar2present[:3, 3]) # valid boxes to present
-                    
-                    for idx, id in enumerate(gt_instances_3d.track_id):
-                        bboxes_xy = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[:2] # present坐标系下其他目标的present的中心
-                        bboxes_vel = gt_instances_3d.bboxes_3d.tensor[idx].numpy()[-2:] # present velocity
-                        label = gt_instances_3d.labels_3d[idx]
-                        if id not in track_map:
-                            track_map[id] = {
-                                # 'color': self.cmaps[np.random.randint(0, len(self.cmaps))],
-                                # 'color': self.cmaps[label],
-                                'label': label,
-                                'center': [],
-                                'vel': [],
-                                'start': i
-                            }
-                        track_map[id]['center'].append(bboxes_xy)
-                        if self.with_velocity:
-                            track_map[id]['vel'].append(bboxes_vel)
-                track_map_list.append(track_map)
+                    poly_region = bbox_corners_voxel[0]
+                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
+                    cv2.fillPoly(instance, [poly_region], 1) # ego only so 1
+                        
+                    ego_segmentations.append(segmentation)
+                    ego_instances.append(instance)
 
-        ego_dix = co_agents.pop(self.ego_name) # ignore the ego
+                ego_segmentations = np.stack(ego_segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
+                ego_instances = np.stack(ego_instances, axis=0).astype(np.int32) # [fu_len, H, W]
+                
+                ego_instance_centerness, ego_instance_offset, ego_instance_flow = convert_instance_mask_to_center_and_offset_label(
+                    ego_instances,
+                    inf_motion_rela_matrix,
+                    1, # ego only
+                    ignore_index = self.ignore_index,
+                    spatial_extent = self.corr_warp_size,
+                ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
 
-        for i, (agent, j) in enumerate(co_agents.items()): # agent
-            # 对于每个协同代理的视角下，将ego的规划轨迹转到协同代理的当前坐标系下
-            track_map = track_map_list[i]
-            present_instances_3d = example_seq[present_idx][j]['data_samples'].gt_instances_3d
-            trans = present_trans_matrix[i] # type: ignore
-            rela_matrix = np.stack([trans @ ego_motion_matrix[k] for k in range(future_length)], axis=0) # type: ignore
-            rela_centers = rela_matrix[:, :2, 3] # x 2
-            if self.with_velocity:
-                rots = np.linalg.inv(future_loc_matrix[j, 0, ...])[:2, :2]# 每个ego速度对于世界，先转到对于present的代理描述下
-                trans_rot = trans[:2, :2] # ego和代理之间具有相对运动，参考上述的motion通过当前的trans转到代理下
-                rela_vel = ego_present_vel @ rots.T @ trans_rot.T
-
-            if self.visualizer:
-                self.visualizer.set_points_from_npz(example_seq[present_idx][j]['data_samples'].metainfo["lidar_path"])
-            
-            # 对于每个协同代理的检测结果（这里是真值），计算其和ego轨迹的关系
-            result_dict = {}
-            if self.with_velocity:
-                potential_dict = {}
-            for id, v in track_map.items():
-                # 对于每一条轨迹
-                # color = v['color'] # 类型颜色
-                start = v['start'] # 开始跟踪的时间戳
-                centers = np.stack(v['center'], axis=0) # N, 2 # 轨迹中心点
-                cmp_centers = rela_centers[start:start + len(centers)] # N, 2 这里保证ego是从头开始的，因此在有效预测目标轨迹的时间段对比
-                correlation_score = 0
-                motion_score = self.linear_motion_score(
-                    cmp_centers, centers, self.min_distance_thres, self.max_distance_thres, self.alpha_coeff
-                )
-                if self.with_velocity:
-                    p_score = 0
-                    if start == 0: # 忽略当前之后再出现的目标的速度
-                        vel = v['vel'][start]
-                        label = v['label']
-                        if self.verbose:
-                            log(f"{id} : {vel}")
-                        potential, p_score = self.potential_score(
-                            cmp_centers[0],
-                            rela_vel,
-                            centers[0],
-                            vel,
-                            label,
-                            self.min_distance_thres,
-                            self.beta_coeff,
-                            self.gamma_coeff
-                        )
-                        correlation_score = motion_score * 0.5 + p_score
-                else:
-                    correlation_score = motion_score
-                result_dict[id] = correlation_score
-                if self.with_velocity:
-                    potential_dict[id] = p_score # potential
-
-                if self.visualizer:
-                    if self.with_velocity and start == 0:
-                        vel_vector = np.stack([centers[0], centers[0] + sample_interval * 0.1 * vel]) # 2, 2
-                        self.visualizer.draw_arrows(vel_vector, fc = 'r', ec = 'r', width = 6, head_width = 12, head_length = 10)
-                    self.visualizer.draw_points(centers, colors=np.linspace(0.0, 1.0, len(centers))[::-1], sizes = 40, cmap='Greens')
-            
-            # import pdb
-            # pdb.set_trace()
-            correlation_scores = np.array([result_dict[id] if id in result_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
-            potentials = np.array([potential_dict[id] if id in potential_dict else 0 for id in present_instances_3d.track_id], dtype=np.float32)
-            
-            present_instances_3d['correlation'] = torch.tensor(correlation_scores, dtype=torch.float32)
-            example_seq[present_idx][j]['data_samples'].gt_instances_3d = present_instances_3d
-            if self.visualizer:
-                self.visualizer.draw_points(rela_centers, colors=np.linspace(0.0, 1.0, future_length)[::-1], sizes = 80, cmap='Blues')
-                if self.with_velocity:
-                    rela_vel_vector = np.stack([rela_centers[0], rela_centers[0] + sample_interval * 0.1 * rela_vel])
-                    self.visualizer.draw_arrows(rela_vel_vector, fc = 'm', ec = 'm', width = 6, head_width = 12, head_length = 10)
-                self.visualizer.draw_bev_bboxes(present_instances_3d.bboxes_3d, c='#FF8000')
-                correlation_scores_str = [f"{s:.2f}" for s in list(correlation_scores)]
-                self.visualizer.draw_texts(
-                    correlation_scores_str,
-                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
-                    font_sizes = 12,
-                    colors = '#FFFF00',
-                    vertical_alignments = 'top',
-                    horizontal_alignments = 'left')
-                potentials_str = [f"{s:.2f}" for s in list(potentials)]
-                self.visualizer.draw_texts(
-                    potentials_str,
-                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
-                    font_sizes = 12,
-                    colors = '#00FFFF',
-                    vertical_alignments = 'top',
-                    horizontal_alignments = 'right')
-                self.visualizer.draw_texts(
-                    present_instances_3d.track_id.tolist(),
-                    present_instances_3d.bboxes_3d.gravity_center[..., :2],
-                    font_sizes = 12,
-                    colors = '#FF00FF',
-                    vertical_alignments = 'bottom',
-                    horizontal_alignments = 'right')
-
-                if self.verbose:
-                    log(result_dict)
-                    log(correlation_scores)
-                    log(agent)
-                if self.increment_save:
-                    self.visualizer.just_save(os.path.join(self.just_save_root, f"{sample_idx}_in_{agent}_{time.time_ns()}.png"))
-                else:
-                    self.visualizer.just_save(os.path.join(self.just_save_root, f"in_{agent}.png"))
-                self.visualizer.clean()
-
-        example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d['correlation'] = \
-        np.ones_like(example_seq[present_idx][ego_dix]['data_samples'].gt_instances_3d.track_id, dtype=np.float32) # type: ignore
-        input_dict['example_seq'] = example_seq
-
+                # 如果分割有任何是没有box的则清除中心度为ignore
+                invalid_mask = (ego_segmentations[:, 0, 0] == self.ignore_index)
+                ego_instance_centerness[invalid_mask] = self.ignore_index
+                ego_motion_label = {
+                    'motion_segmentation': torch.from_numpy(ego_segmentations).float(), # [fu_len, H, W]
+                    'motion_instance': torch.from_numpy(ego_instances).float(), # [fu_len, H, W]
+                    'instance_centerness': torch.from_numpy(ego_instance_centerness).float(), # len, 1, h, w
+                    'instance_offset': torch.from_numpy(ego_instance_offset).float(), # len, 2, h, w
+                    'instance_flow': torch.from_numpy(ego_instance_flow).float(), # len, 2, h, w invalid at last
+                    'future_egomotion': torch.from_numpy(inf_motion_rela_matrix), # len, 4, 4 ident at 0
+                    # 'future_pose_matrix': torch.from_numpy(future_pose_matrix[:, infrastructure_idx, j, ...]) # len, 4, 4 ego to infrastructure
+                }
+                input_dict['example_seq'][present_idx][j]['ego_motion_label'] = ego_motion_label
+                # print(input_dict['example_seq'][present_idx][j].keys())
         return input_dict
 
 

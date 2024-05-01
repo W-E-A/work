@@ -201,7 +201,7 @@ def _process_target_items(target_items_subset, data_path, load_anno, sample_inte
     return scene_data
 
 
-def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool = True):
+def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool = True, sweep_size: int = 0):
     result = []
     if load_anno:
         # correct the velocity
@@ -320,12 +320,21 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
                 if (last_timestamp - timestamp) % sample_interval == 0:
                     filtered_idx.append(idx)
             assert len(filtered_idx) > 0,f"No sample after {sample_interval} filtered"
-            agent_data_dict[agent] = [agent_data_dict[agent][idx] for idx in filtered_idx]
+            if sweep_size > 0:
+                assert sweep_size < sample_interval
+                temp = []
+                for idx in filtered_idx:
+                    data = agent_data_dict[agent][idx]
+                    data['history_lidar_sweeps'] = [agent_data_dict[agent][idx - j]['lidar_path'] for j in range(1, sweep_size+1) if idx - j >= 0]
+                    temp.append(data)
+                agent_data_dict[agent]
+            else:
+                agent_data_dict[agent] = [agent_data_dict[agent][idx] for idx in filtered_idx]
             result.extend(agent_data_dict[agent])
     return result
 
 
-def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_path=None, sample_interval = 5):
+def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_path=None, sample_interval = 5, sweep_size = 0):
     assert sample_interval >= 1
     _check_dataset_folder(data_path, deepaccident_folder_struct)
     train_split_items = _read_list_file(osp.join(data_path,'split_txt_files'),'train',split=' ')
@@ -343,17 +352,17 @@ def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_pat
     }
 
     mmengine.print_log('Generate info. this may take several minutes.','current')
-    deepaccident_infos_train = _get_detail_info(train_split_items,data_path,sample_interval)
+    deepaccident_infos_train = _get_detail_info(train_split_items,data_path,sample_interval,sweep_size=sweep_size)
     filename = osp.join(save_path,f'{pkl_prefix}_infos_train.pkl')
     output_dict['data_list'] = deepaccident_infos_train
     mmengine.dump(output_dict, filename)
     mmengine.print_log(f'DeepAccident info train file is saved to {filename}','current')
-    deepaccident_infos_val = _get_detail_info(val_split_items,data_path,sample_interval)
+    deepaccident_infos_val = _get_detail_info(val_split_items,data_path,sample_interval,sweep_size=sweep_size)
     filename = osp.join(save_path,f'{pkl_prefix}_infos_val.pkl')
     output_dict['data_list'] = deepaccident_infos_val
     mmengine.dump(output_dict, filename)
     mmengine.print_log(f'DeepAccident info val file is saved to {filename}','current')
-    # deepaccident_infos_test = _get_detail_info(test_split_items,data_path,sample_interval)
+    # deepaccident_infos_test = _get_detail_info(test_split_items,data_path,sample_interval,sweep_size=sweep_size)
     # filename = osp.join(save_path,f'{pkl_prefix}_infos_test.pkl')
     # output_dict['data_list'] = deepaccident_infos_test
     # mmengine.dump(output_dict, filename)

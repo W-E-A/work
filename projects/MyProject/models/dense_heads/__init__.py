@@ -1,3 +1,3 @@
-from .heads import BaseTaskHead, MTHead, CenterHeadModified, CorrGenerate
+from .heads import BaseTaskHead, MTHead, CenterHeadModified, CorrGenerateHead
 
-__all__ = ['BaseTaskHead', 'MTHead', 'CenterHeadModified', 'CorrGenerate']
+__all__ = ['BaseTaskHead', 'MTHead', 'CenterHeadModified', 'CorrGenerateHead']

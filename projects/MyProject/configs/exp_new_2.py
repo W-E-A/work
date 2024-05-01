@@ -11,7 +11,6 @@ test_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
 classes = [
     'car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian'
 ]
-
 agents = [
     'ego_vehicle', 'other_vehicle', 'ego_vehicle_behind', 'other_vehicle_behind', 'infrastructure'
 ]
@@ -48,27 +47,19 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-# train params
-train_batch_size = 1
-train_num_workers = 1
-train_seq_length = 8
-train_present_idx = 2
-train_key_interval = 1
-train_co_agents = ('ego_vehicle', 'infrastructure')
-train_ego_name = 'ego_vehicle'
-train_mode = 'sparse_fusion' # sparse_fusion, dense_fusion, single 分别为where2comm的通信，全通信，单车检测
-train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
-
-# test params
-test_batch_size = 1
-test_num_workers = 1
-test_seq_length = 6
-test_present_idx = 0
-test_key_interval = 1
-test_co_agents = ('ego_vehicle', 'infrastructure')
-test_ego_name = 'ego_vehicle'
-test_mode = 'where2comm' # full where2comm new_method single 分别为全通信，where2comm的通信，新方法通信，单车检测
-test_comm_ksize = 5 # comm kernel size 通信高斯卷积核的大小，用于放大heatmap
+batch_size = 1
+num_workers = 1
+seq_length = 8
+present_idx = 2
+sample_key_interval = 1
+# sample_agents = (
+#     'ego_vehicle', 'infrastructure',
+# )
+# sample_agents = (
+#     'ego_vehicle', 'other_vehicle', 'infrastructure',
+# )
+sample_agents = tuple(agents)
+infrastructure_name = 'infrastructure'
 
 train_pipline = [
     dict(
@@ -83,7 +74,7 @@ train_pipline = [
         with_bbox_3d_isvalid=True,
         with_track_id=True,
         ),
-    dict(type='ConstructEGOBox'),
+    dict(type='ConstructEGOBox', infrastructure_name=infrastructure_name),
     # dict(type='ObjectSample', db_sampler=db_sampler),
     # dict( # FIXME how to deal with the feture wrapper
     #     type='GlobalRotScaleTrans',
@@ -122,7 +113,7 @@ test_pipline = [
         with_bbox_3d_isvalid=True,
         with_track_id=True,
         ),
-    dict(type='ConstructEGOBox'),
+    dict(type='ConstructEGOBox', infrastructure_name=infrastructure_name),
     # dict(type='ObjectSample', db_sampler=db_sampler),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
     # dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range), # FIXME
@@ -142,7 +133,7 @@ train_scene_pipline = [
     dict(type='GatherV2XPoseInfo'),
     dict(
         type = 'CorrelationFilter',
-        ego_name = train_ego_name,
+        infrastructure_name = infrastructure_name,
         with_velocity = det_with_velocity,
         only_vehicle = False,
         vehicle_id_list = [0, 1, 2],
@@ -166,6 +157,7 @@ train_scene_pipline = [
         type = 'MakeMotionLabels',
         pc_range = motion_range,
         voxel_size = motion_voxel_size,
+        infrastructure_name = infrastructure_name,
         corr_pc_range = lidar_range,
         corr_voxel_size = corr_voxel_size,
         ego_id = -100,
@@ -188,7 +180,7 @@ test_scene_pipline = [
     dict(type='GatherV2XPoseInfo'),
     dict(
         type = 'CorrelationFilter',
-        ego_name = test_ego_name,
+        infrastructure_name = infrastructure_name,
         with_velocity = det_with_velocity,
         only_vehicle = False,
         vehicle_id_list = [0, 1, 2],
@@ -212,6 +204,7 @@ test_scene_pipline = [
         type = 'MakeMotionLabels',
         pc_range = motion_range,
         voxel_size = motion_voxel_size,
+        infrastructure_name = infrastructure_name,
         corr_pc_range = lidar_range,
         corr_voxel_size = corr_voxel_size,
         ego_id = -100,
@@ -231,13 +224,13 @@ test_scene_pipline = [
 ]
 
 train_dataloader = dict(
-    batch_size=train_batch_size,
-    num_workers=train_num_workers,
+    batch_size=batch_size,
+    num_workers=num_workers,
     pin_memory=True,
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=True),
+          shuffle=False),
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path,
@@ -245,10 +238,10 @@ train_dataloader = dict(
         modality = dict(use_lidar=True, use_camera=False),
         box_type_3d = 'LiDAR',
         load_type = 'frame_based',
-        key_interval = train_key_interval,
-        seq_length = train_seq_length,
-        present_idx = train_present_idx,
-        co_agents = train_co_agents,
+        key_interval = sample_key_interval,
+        seq_length = seq_length,
+        present_idx = present_idx,
+        co_agents = sample_agents,
         filter_empty_gt = True,
         test_mode = False,
         scene_shuffle = False,
@@ -259,8 +252,8 @@ train_dataloader = dict(
 )
 
 test_dataloader = dict(
-    batch_size=test_batch_size,
-    num_workers=test_num_workers,
+    batch_size=batch_size,
+    num_workers=num_workers,
     pin_memory=True,
     drop_last=False,
     sampler=dict(
@@ -273,10 +266,10 @@ test_dataloader = dict(
         modality = dict(use_lidar=True, use_camera=False),
         box_type_3d = 'LiDAR',
         load_type = 'frame_based',
-        key_interval = test_key_interval,
-        seq_length = test_seq_length,
-        present_idx = test_present_idx,
-        co_agents = test_co_agents,
+        key_interval = sample_key_interval,
+        seq_length = seq_length,
+        present_idx = present_idx,
+        co_agents = sample_agents,
         filter_empty_gt = True,
         test_mode = True,
         scene_shuffle = False,
@@ -296,6 +289,7 @@ model = dict(
     type='CorrelationModel',
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
+        delete_pointcloud=True,
         voxel=True,
         voxel_type = 'hard',
         voxel_layer=dict(
@@ -385,7 +379,6 @@ model = dict(
             common_heads=det_common_heads,
             loss_cls=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
             loss_bbox=dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
-            loss_corr = dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
             separate_head=dict(
                 type='SeparateHead',
                 head_conv=64,
@@ -430,8 +423,9 @@ model = dict(
         corr_head=dict(
             type='CorrGenerateHead',
             pc_range=lidar_range,
-            n_future_and_present=5+1,
-            label_size=1+1+2+2,
+            voxel_size=corr_voxel_size,
+            n_future_and_present=seq_length - present_idx, # future and present
+            label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
             in_channels=sum([128, 128, 128]),
             loss_corr=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
             separate_head=dict(
@@ -450,12 +444,14 @@ model = dict(
         out_size_factor=det_out_factor,
         dense_reg=1,
         gaussian_overlap=0.1,
-        rela_gaussian_overlap=0.1,
         max_objs=500,
         min_radius=2,
         code_weights=code_weights, # code_size
-        gather_task_loss=True,
-        train_mode=train_mode, # FIXME
+
+        corr_dense_reg=1,
+        corr_max_objs=500,
+        corr_gaussian_overlap=0.1,
+        corr_min_radius=2
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
@@ -468,13 +464,15 @@ model = dict(
         max_per_img=500,
         max_pool_nms=False,
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
-        test_mode=test_mode, # FIXME
     ),
     # pts_fusion_cfg=dict(
     #     train_ego_name=train_ego_name, # FIXME
     #     test_ego_name=test_ego_name,
     #     corr_pc_range=lidar_range,
     # )
+    co_cfg=dict(
+        infrastructure_name=infrastructure_name
+    )
 )
 
 lr = 1 * 1e-4

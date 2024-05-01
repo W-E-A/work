@@ -5,8 +5,9 @@ from mmdet3d.models import Det3DDataPreprocessor
 
 @MODELS.register_module()
 class DeepAccidentDataPreprocessor(Det3DDataPreprocessor):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, delete_pointcloud: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
+        self.delete_pointcloud = delete_pointcloud
 
     def forward(self,
                 data: Union[dict, List[dict]],
@@ -21,6 +22,9 @@ class DeepAccidentDataPreprocessor(Det3DDataPreprocessor):
                 # import pdb;pdb.set_trace()
                 input_dict = data['example_seq'][i][j] # type: ignore
                 casted_example_seq[i][j] = self.simple_process(input_dict, training) # type: ignore
+                if self.delete_pointcloud:
+                    if 'points' in casted_example_seq[i][j]['inputs'].keys():
+                        casted_example_seq[i][j]['inputs'].pop('points')
                 if i == present_idx:
                     casted_example_seq[i][j]['motion_label'] = self.cast_data(input_dict['motion_label'])
                     if 'ego_motion_label' in input_dict.keys(): # if ego
