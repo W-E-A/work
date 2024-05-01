@@ -38,7 +38,7 @@ class IterativeFlow(BaseMotionHead):
             )
 
 
-    def forward(self, bevfeats, targets=None, noise=None):
+    def forward(self, bevfeats, future_distribution_inputs=None, noise=None):
         '''
         the forward process of motion head:
         1. get present & future distributions
@@ -49,11 +49,8 @@ class IterativeFlow(BaseMotionHead):
         bevfeats = bevfeats[0] # b, 384, 256, 256 输入应该是结合了历史bev信息也就是temporal模块的bev特征，或者是单帧的BEV特征
         bevfeats = self.cropper(bevfeats) # b, 384, 200, 200
 
-        if self.training or self.posterior_with_label:
-            self.training_labels, future_distribution_inputs = self.prepare_future_labels(
-                targets)
-        else:
-            future_distribution_inputs = None
+        if self.training:
+            assert future_distribution_inputs is not None
         
         # future_distribution_inputs  B len 1+1+2+2 200, 200 or None
 
