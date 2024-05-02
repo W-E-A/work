@@ -1,4 +1,6 @@
 from typing import List, Optional, Union,  Dict, Tuple
+import torch
+import torch.nn.functional as F
 import numpy as np
 from numpy import ndarray
 from mmdet3d.registry import TRANSFORMS, VISUALIZERS
@@ -35,7 +37,7 @@ from ..utils import calc_relative_pose, convert_instance_mask_to_center_and_offs
 @TRANSFORMS.register_module()
 class LoadPointsNPZ(LoadPointsFromFile):
     def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        super(LoadPointsNPZ, self).__init__(*args, **kwargs)
 
     def _load_points(self, pts_filename: str) -> ndarray:
         assert osp.exists(pts_filename) and pts_filename.endswith('.npz')
@@ -44,34 +46,59 @@ class LoadPointsNPZ(LoadPointsFromFile):
 
 
 @TRANSFORMS.register_module()
-class InnerPointsRangeFilter(BaseTransform):
-    def __init__(self, point_cloud_range: List[float]) -> None:
-        self.pcd_range = np.array(point_cloud_range, dtype=np.float32)
+class LoadPointsFromMultiSweepsNPZ(BaseTransform):
+    def __init__(self,
+        pad_delay: bool = False,
+        remove_point_cloud_range: Optional[List[float]] = None,
+        pad_empty_sweeps: int = 0,
+        del_sweeps: bool = True,
+        *args,
+        **kwargs,) -> None:
+        self.loader = LoadPointsNPZ(*args, **kwargs)
+        self.pad_delay = pad_delay
+        self.remove_point_cloud_range = remove_point_cloud_range
+        self.pad_empty_sweeps = pad_empty_sweeps
+        self.del_sweeps = del_sweeps
 
-    def transform(self, input_dict: dict) -> dict:
-        points = input_dict['points']
-        points_mask = points.in_range_3d(self.pcd_range)
+    def _remove_inner_range(self, points, remove_point_cloud_range):
+        points_mask = points.in_range_3d(remove_point_cloud_range)
         points_mask = torch.logical_not(points_mask)
-        clean_points = points[points_mask]
-        input_dict['points'] = clean_points
-        points_mask = points_mask.numpy()
+        return points[points_mask]
 
-        pts_instance_mask = input_dict.get('pts_instance_mask', None)
-        pts_semantic_mask = input_dict.get('pts_semantic_mask', None)
-
-        if pts_instance_mask is not None:
-            input_dict['pts_instance_mask'] = pts_instance_mask[points_mask]
-
-        if pts_semantic_mask is not None:
-            input_dict['pts_semantic_mask'] = pts_semantic_mask[points_mask]
-
-        return input_dict
-
-    def __repr__(self) -> str:
-        """str: Return a string that describes the module."""
-        repr_str = self.__class__.__name__
-        repr_str += f'(point_cloud_range={self.pcd_range.tolist()})'
-        return repr_str
+    def transform(self, results: dict) -> dict:
+        assert 'points' in results.keys()
+        points = results['points'] # BasePoints
+        if self.pad_delay:
+            dtype = points.tensor.dtype
+            device = points.tensor.device
+            points.tensor = torch.cat([points.tensor, torch.full((points.tensor.shape[0], 1), 0.0).to(dtype).to(device)], dim=1)
+            points.points_dim = points.tensor.shape[-1]
+        if self.remove_point_cloud_range:
+            points = self._remove_inner_range(points, self.remove_point_cloud_range)
+        sweep_points_list = [points]
+        ts = results['timestamp']
+        if 'lidar_sweeps' not in results:
+            if self.pad_empty_sweeps > 0:
+                for i in range(self.pad_empty_sweeps):
+                    sweep_points_list.append(points)
+        else:
+            for sweep in results['lidar_sweeps']:
+                sweep_ts = sweep['timestamp']
+                sweep2key = sweep['sweep2key']
+                points_sweep = self.loader.transform(sweep)['points']
+                if self.pad_delay:
+                    dtype = points_sweep.tensor.dtype
+                    device = points_sweep.tensor.device
+                    points_sweep.tensor = torch.cat([points_sweep.tensor, torch.full((points_sweep.tensor.shape[0], 1), 0.1 * (ts - sweep_ts)).to(dtype).to(device)], dim=1)
+                    points_sweep.points_dim = points_sweep.tensor.shape[-1]
+                if self.remove_point_cloud_range:
+                    points_sweep = self._remove_inner_range(points_sweep, self.remove_point_cloud_range)
+                sweep_points_list.append(points_sweep.convert_to(Coord3DMode.LIDAR, sweep2key))
+        points = points.cat(sweep_points_list)
+        results['points'] = points
+        if self.del_sweeps and 'lidar_sweeps' in results:
+            results.pop('lidar_sweeps')
+        return results
 
 
 @TRANSFORMS.register_module()
@@ -643,11 +670,9 @@ class CorrelationFilter(BaseTransform):
                         log(agent)
                     if self.increment_save:
                         save_path = os.path.join(self.just_save_root, f"{agent}")
-                        os.makedirs(save_path, exist_ok=True)
                         self.visualizer.just_save(os.path.join(save_path, f"{sample_idx}.png"))
                     else:
                         save_path = os.path.join(self.just_save_root, f"{agent}")
-                        os.makedirs(save_path, exist_ok=True)
                         self.visualizer.just_save(os.path.join(save_path, f"{sample_idx}.png"))
                     self.visualizer.clean()
         
@@ -846,51 +871,6 @@ class MakeMotionLabels(BaseTransform):
                 }
                 input_dict['example_seq'][present_idx][j]['ego_motion_label'] = ego_motion_label
                 # print(input_dict['example_seq'][present_idx][j].keys())
-        return input_dict
-
-
-@TRANSFORMS.register_module()
-class GatherHistoryPoint(BaseTransform):
-    def __init__(self, pad_delay: bool = True, impl: bool = False) -> None:
-        self.pad_delay = pad_delay
-        self.impl = impl
-        if not impl:
-            assert not pad_delay, "pad_delay must be False when not impl"
-    def transform(self, input_dict: Dict) -> Union[Dict,Tuple[List, List],None]:
-        if self.impl:
-            sample_interval = input_dict['sample_interval'] # 序列采集间隔
-            present_idx = input_dict['present_idx'] # 当前序列第几位开始是关键帧, 比如0
-            seq_length = input_dict['seq_length'] # 当前序列长度，比如6
-            co_agents = copy.deepcopy(input_dict['co_agents']) # 参与协同的代理名称
-            example_seq = input_dict['example_seq'] # 经过单车pipline得到的输入和标签数据
-            history_seq_position = range(seq_length)[:present_idx+1] # 历史帧索引
-            history_length = len(history_seq_position) # 历史长度
-            delays = [-i * sample_interval * 0.1 for i in range(history_length)][::-1] # 历史时间差
-            future_loc_matrix = input_dict['loc_matrix'][:present_idx+1, ...] # c x 4 4 # 历史ego的实际位置 比如 3, 2, 4, 4
-
-            after_dim = 4
-            for j, agent in enumerate(co_agents):
-                all_points = []
-                for i, idx in enumerate(history_seq_position):
-                    # import pdb
-                    # pdb.set_trace()
-                    points = example_seq[idx][j]['inputs']['points']
-                    if self.pad_delay:
-                        points = torch.cat([
-                            points,
-                            torch.full_like(points[..., :1], delays[i])
-                        ], dim=-1)
-                    points = LiDARPoints(
-                        points,
-                        points_dim=points.shape[-1],
-                    )
-                    if i < history_length - 1:
-                        trans = calc_relative_pose(future_loc_matrix[-1], future_loc_matrix[i])
-                        all_points.append(points.convert_to(Coord3DMode.LIDAR, trans))
-                    else:
-                        all_points.append(points)
-                all_points = LiDARPoints.cat(all_points)
-                example_seq[present_idx][j]['inputs']['points'] = all_points.tensor
         return input_dict
 
 

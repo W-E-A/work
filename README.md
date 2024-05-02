@@ -65,11 +65,15 @@ nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py p
 python tools/test_v2x.py projects/MyProject/configs/exp1.py work_dirs/exp1/epoch_20.pth --work-dir work_dirs/uni_temppp
 
 #create data
-# dair-v2x-c
-python tools/create_data.py dair-v2x --root-path /path/to/dataset --version c --out-dir ./data/dair
-# deepaccident
+# deepaccident no sweeps
 python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident
-# python tools/create_data.py deepaccident --root-path /mnt/auto-labeling/wyc/datasets --sample-interval 5 --out-dir ./data/deepaccident
+# deepaccident multi sweeps (max-sweeps must lt sample-interval)
+python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident_ms --max-sweeps 2
+# deepaccident 10 small amounts of data (no sweeps)
+python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident_debug --debug
+# deepaccident 10 small amounts of data (with sweeps)
+python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident_ms_debug --max-sweeps 2 --debug
+
 # deepaccident 文件结构：
 # .
 # ├── DeepAccident_mini
@@ -93,8 +97,7 @@ python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-i
 #     ├── ......
 
 # analyze data
-python tools/analyze_data.py /path/to/config --mode analyze_data --verbose
-# python tools/analyze_data.py projects/MyProject/configs/exp1.py --mode analyze_data --verbose
+python tools/analyze_data.py /path/to/config --mode check_raw_info_format --verbose
 
 # generate env info
 pipreqs --ignore ./thirdpart/ --savepath ./current_env.txt --use-local ./

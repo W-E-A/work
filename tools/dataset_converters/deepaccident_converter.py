@@ -201,7 +201,7 @@ def _process_target_items(target_items_subset, data_path, load_anno, sample_inte
     return scene_data
 
 
-def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool = True, sweep_size: int = 0):
+def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool = True, max_sweeps: int = 0, debug: bool = False):
     result = []
     if load_anno:
         # correct the velocity
@@ -210,6 +210,9 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
     # parellel
     num_processes = max(os.cpu_count() // 8, 1)
     num_threads = os.cpu_count() // 2
+    if debug:
+        target_items = target_items[:10]
+        num_processes = 5
     target_items_split = [target_items[i::num_processes] for i in range(num_processes)]
 
     with mp.Pool(processes=num_processes) as pool:
@@ -226,7 +229,7 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
             if load_anno:
                 agent_data_dict[agent] = sorted(agent_data_dict[agent], key=lambda x: x['timestamp'])
                 data_len = len(agent_data_dict[agent])
-                ego_motion = np.array([data['lidar_to_world_matrix'] for data in agent_data_dict[agent]], dtype=np.float32) # N 4 4
+                ego_motion = np.array([data['ego_to_world_matrix'] for data in agent_data_dict[agent]], dtype=np.float32) # N 4 4
                 ego_xy = ego_motion[:, :2, 3] # N 2
                 ego_xy_delta = ego_xy[1:] - ego_xy[:-1] # N-1 2
                 ego_vel = ego_xy_delta / sample_dt # N 2
@@ -320,21 +323,32 @@ def _get_detail_info(target_items, data_path, sample_interval, load_anno: bool =
                 if (last_timestamp - timestamp) % sample_interval == 0:
                     filtered_idx.append(idx)
             assert len(filtered_idx) > 0,f"No sample after {sample_interval} filtered"
-            if sweep_size > 0:
-                assert sweep_size < sample_interval
+            if max_sweeps > 0:
+                assert max_sweeps < sample_interval
                 temp = []
                 for idx in filtered_idx:
                     data = agent_data_dict[agent][idx]
-                    data['history_lidar_sweeps'] = [agent_data_dict[agent][idx - j]['lidar_path'] for j in range(1, sweep_size+1) if idx - j >= 0]
+                    key_to_world_matrix = agent_data_dict[agent][idx]['lidar_to_world_matrix']
+                    sweeps = []
+                    while (len(sweeps) < max_sweeps and idx > len(sweeps)):
+                        sweep_to_world_matrix = agent_data_dict[agent][idx - len(sweeps) - 1]['lidar_to_world_matrix']
+                        sweep = {
+                            'lidar_path' : agent_data_dict[agent][idx - len(sweeps) - 1]['lidar_path'],
+                            'timestamp' : agent_data_dict[agent][idx - len(sweeps) - 1]['timestamp'],
+                            'lidar_to_ego_matrix' : agent_data_dict[agent][idx - len(sweeps) - 1]['lidar_to_ego_matrix'],
+                            'sweep_to_key_matrix' : np.linalg.inv(key_to_world_matrix) @ sweep_to_world_matrix,
+                        }
+                        sweeps.append(sweep)
+                    data['sweeps'] = sweeps
                     temp.append(data)
-                agent_data_dict[agent]
+                agent_data_dict[agent] = temp
             else:
                 agent_data_dict[agent] = [agent_data_dict[agent][idx] for idx in filtered_idx]
             result.extend(agent_data_dict[agent])
     return result
 
 
-def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_path=None, sample_interval = 5, sweep_size = 0):
+def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_path=None, sample_interval = 5, max_sweeps = 0, debug = False):
     assert sample_interval >= 1
     _check_dataset_folder(data_path, deepaccident_folder_struct)
     train_split_items = _read_list_file(osp.join(data_path,'split_txt_files'),'train',split=' ')
@@ -352,17 +366,17 @@ def create_deepaccident_info_file(data_path, pkl_prefix='deepaccident', save_pat
     }
 
     mmengine.print_log('Generate info. this may take several minutes.','current')
-    deepaccident_infos_train = _get_detail_info(train_split_items,data_path,sample_interval,sweep_size=sweep_size)
+    deepaccident_infos_train = _get_detail_info(train_split_items,data_path,sample_interval,max_sweeps=max_sweeps, debug=debug)
     filename = osp.join(save_path,f'{pkl_prefix}_infos_train.pkl')
     output_dict['data_list'] = deepaccident_infos_train
     mmengine.dump(output_dict, filename)
     mmengine.print_log(f'DeepAccident info train file is saved to {filename}','current')
-    deepaccident_infos_val = _get_detail_info(val_split_items,data_path,sample_interval,sweep_size=sweep_size)
+    deepaccident_infos_val = _get_detail_info(val_split_items,data_path,sample_interval,max_sweeps=max_sweeps, debug=debug)
     filename = osp.join(save_path,f'{pkl_prefix}_infos_val.pkl')
     output_dict['data_list'] = deepaccident_infos_val
     mmengine.dump(output_dict, filename)
     mmengine.print_log(f'DeepAccident info val file is saved to {filename}','current')
-    # deepaccident_infos_test = _get_detail_info(test_split_items,data_path,sample_interval,sweep_size=sweep_size)
+    # deepaccident_infos_test = _get_detail_info(test_split_items,data_path,sample_interval,max_sweeps=max_sweeps, debug=debug)
     # filename = osp.join(save_path,f'{pkl_prefix}_infos_test.pkl')
     # output_dict['data_list'] = deepaccident_infos_test
     # mmengine.dump(output_dict, filename)

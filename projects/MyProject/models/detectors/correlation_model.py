@@ -9,7 +9,6 @@ import logging
 def log(msg = "" ,level: int = logging.INFO):
     print_log(msg, "current", level)
 from mmdet3d.structures import Det3DDataSample
-import os
 from ...visualization import SimpleLocalVisualizer
 
 
@@ -165,12 +164,35 @@ class CorrelationModel(MVXTwoStageDetector):
         ego_names = [co_agents[id] for id in ego_ids]
         present_seq = example_seq[present_idx]
         ################################ INPUT DEBUG (stop here) ################################
-        # import pdb
-        # pdb.set_trace()
-        # if mode == 'loss': 
-        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        # assert batch_size == 1
+        # scene_info_0.pop('pose_matrix')
+        # scene_info_0.pop('future_motion_matrix')
+        # scene_info_0.pop('loc_matrix')
+        # scene_info_0.pop('future_motion_rela_matrix')
+        # log(scene_info_0)
+        # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+        
+        # if 'points' in present_seq[self.infrastructure_id]['inputs'].keys():
+        #     visualizer.set_points(present_seq[self.infrastructure_id]['inputs']['points'][0].cpu().numpy())
+        #     visualizer.just_save(f'./data/vis/lidar_bev/{sample_idx}/{self.infrastructure_name}_lidar_bev.png')
+        #     visualizer.clean()
         # else:
-        #     return []
+        #     log("no points to visualize, please check the config file.", logging.WARN)
+        
+        # for id, name in zip(ego_ids, ego_names):
+        #     if 'points' in present_seq[id]['inputs'].keys():
+        #         visualizer.set_points(present_seq[id]['inputs']['points'][0].cpu().numpy())
+        #         visualizer.just_save(f'./data/vis/lidar_bev/{sample_idx}/{name}_lidar_bev.png')
+        #         visualizer.clean()
+        #     else:
+        #         log("no points to visualize, please check the config file.", logging.WARN)
+        
+        import pdb
+        pdb.set_trace()
+        if mode == 'loss': 
+            return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        else:
+            return []
         ################################ INPUT DEBUG (stop here) ################################
 
         # infrastructure的所有输入
@@ -211,15 +233,9 @@ class CorrelationModel(MVXTwoStageDetector):
             # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
             
-            # if 'points' in present_seq[self.infrastructure_id]['inputs'].keys():
-            #     visualizer.set_points(present_seq[self.infrastructure_id]['inputs']['points'][0].cpu().numpy())
-            #     os.makedirs(f'./data/motion/{sample_idx}', exist_ok=True)
-            #     visualizer.just_save(f'./data/motion/{sample_idx}/lidar_bev.png')
-            #     visualizer.clean()
-
-            # visualizer.draw_motion_label(infrastructure_label, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix='infrastructure')
+            # visualizer.draw_motion_label(infrastructure_label, f'./data/vis/motion_label/{sample_idx}', 2, display_order='horizon', gif=True, prefix='infrastructure')
             # for id, label in zip(ego_ids, ego_motion_labels):
-            #     visualizer.draw_motion_label(label, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True, prefix=f'{co_agents[id]}_motion')
+            #     visualizer.draw_motion_label(label, f'./data/vis/motion_label/{sample_idx}', 2, display_order='horizon', gif=True, prefix=f'{co_agents[id]}_motion')
 
             # import pdb
             # pdb.set_trace()
@@ -243,7 +259,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 det_forward_kwargs=det_forward_kwargs,
                 motion_forward_kwargs=motion_forward_kwargs,
                 corr_forward_kwargs=corr_forward_kwargs,
-            ) # return multi_task_multi_feat, feat_dict, feat_list # FIXME 2.4 times
+            ) # return multi_task_multi_feat, feat_dict, feat_list # FIXME 2.4 times GPU MEM
 
             heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(infrastructure_instances)
             det_loss_kwargs = {
@@ -264,11 +280,11 @@ class CorrelationModel(MVXTwoStageDetector):
             # scene_info_0.pop('future_motion_rela_matrix')
             # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+
             # for idx, name in enumerate(ego_names):
             #     maps = corr_heatmaps[idx][0]
             #     visualizer.draw_featmap(maps)
-            #     os.makedirs(f'./data/correlation/{sample_idx}', exist_ok=True)
-            #     visualizer.just_save(f'./data/correlation/{sample_idx}/{name}_correlation_heatmap.png')
+            #     visualizer.just_save(f'./data/vis/correlation_heatmap/{sample_idx}/{name}_correlation_heatmap_gt.png')
             #     visualizer.clean()
 
             # import pdb
@@ -293,68 +309,141 @@ class CorrelationModel(MVXTwoStageDetector):
 
             return loss_dict
         else:
-            return []
-        #     single_head_feat_dict = self.multi_task_head(neck_features[self.infrastructure_id]) # out from dethead and motionhead # FIXME only forward ego feature
+            ego_motion_labels = [present_seq[ego_id]['ego_motion_label'] for ego_id in ego_ids]
+            ego_motion_labels, ego_motion_inputs = self.multi_task_head.corr_head.prepare_ego_labels(ego_motion_labels)
+            ################################ SHOW MOTION LABEL ################################
+            # assert batch_size == 1
+            # scene_info_0.pop('pose_matrix')
+            # scene_info_0.pop('future_motion_matrix')
+            # scene_info_0.pop('loc_matrix')
+            # scene_info_0.pop('future_motion_rela_matrix')
+            # log(scene_info_0)
+            # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
             
-        #     ret_list = []
-        #     predict_dict = self.multi_task_head.predict(single_head_feat_dict,  meat_list[self.infrastructure_id])
-        #     if 'det_pred' in predict_dict:
-        #         pred_result = predict_dict['det_pred'] # add to pred_instances_3d from None to instance of bboxes_3d scores_3d labels_3d
-        #         for b in range(batch_size):
-        #             sample = Det3DDataSample()
-        #             sample.set_metainfo(
-        #                 dict(
-        #                     scene_sample_idx = scene_info[b].sample_idx,
-        #                     scene_name = scene_info[b].scene_name,
-        #                     agent_name = 'infrastructure', # FIXME
-        #                     sample_idx = meat_list[self.infrastructure_id][b]['sample_idx'], # type: ignore
-        #                     box_type_3d = meat_list[self.infrastructure_id][b]['box_type_3d'], # type: ignore
-        #                     lidar_path = meat_list[self.infrastructure_id][b]['lidar_path'], # type: ignore
-        #                 )
-        #             )
-        #             sample.gt_instances_3d = ins_list[self.infrastructure_id][b] # type: ignore
-        #             sample.gt_instances_3d.pop('track_id') # no need array
-        #             sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
-        #             # sample.gt_instances_3d.pop('coop_isvalid') # no need array
-        #             sample.gt_instances_3d.pop('correlation') # no need array
-        #             sample.pred_instances_3d = pred_result[b]
-        #             import pdb
+            # for id, label in zip(ego_ids, ego_motion_labels):
+            #     visualizer.draw_motion_label(label, f'./data/vis/motion_label/{sample_idx}', 2, display_order='horizon', gif=True, prefix=f'{co_agents[id]}_motion')
 
-        #             pdb.set_trace()
-        #             ret_list.append(sample)
-        #         ################################ SHOW EGO SINGLE DETECT RESULT ################################
-        #         # import os
-        #         # os.makedirs('./data/step_vis_data', exist_ok=True)
-        #         # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
-        #         # for idx, result in enumerate(ret_list):
-        #         #     visualizer.set_points_from_npz(result.lidar_path)
-        #         #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
-        #         #     thres = self.score_threshold
-        #         #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
-        #         #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
-        #         #     visualizer.just_save(f'./data/step_vis_data/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+            # import pdb
+            # pdb.set_trace()
+            # if mode == 'loss': 
+            #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+            # else:
+            #     return []
+            ################################ SHOW MOTION LABEL ################################
 
-        #         # import pdb
-        #         # pdb.set_trace()
-        #         ################################ SHOW EGO SINGLE DETECT RESULT ################################
+            det_forward_kwargs = {}
+            motion_forward_kwargs = {
+                'future_distribution_inputs':None,
+                'noise':None
+            }
+            corr_forward_kwargs = {
+                'ego_motion_inputs':ego_motion_inputs
+            }
+
+            infrastructure_feat_dict = self.multi_task_head(
+                infrastructure_features,
+                det_forward_kwargs=det_forward_kwargs,
+                motion_forward_kwargs=motion_forward_kwargs,
+                corr_forward_kwargs=corr_forward_kwargs,
+            ) # return multi_task_multi_feat, feat_dict, feat_list # FIXME 2.4 times
+
+            det_pred_kwargs = {
+                'batch_input_metas':infrastructure_metas
+            }
+            motion_pred_kwargs = {
+            }
+            corr_pred_kwargs = {
+                'ego_motion_inputs':ego_motion_inputs
+            }
+
+            predict_dict = self.multi_task_head.predict(
+                infrastructure_feat_dict,
+                det_pred_kwargs=det_pred_kwargs,
+                motion_pred_kwargs=motion_pred_kwargs,
+                corr_pred_kwargs=corr_pred_kwargs,
+            )
+
+            return_dict = {}
+
+            if 'det_pred' in predict_dict:
+                det_ret_list = []
+                pred_result = predict_dict['det_pred'] # add to pred_instances_3d from None to instance of bboxes_3d scores_3d labels_3d
+                for b in range(batch_size):
+                    sample = Det3DDataSample()
+                    sample.set_metainfo(
+                        dict(
+                            scene_sample_idx = scene_info[b].sample_idx,
+                            scene_name = scene_info[b].scene_name,
+                            agent_name = self.infrastructure_name, # FIXME
+                            sample_idx = meat_list[self.infrastructure_id][b]['sample_idx'], # type: ignore
+                            box_type_3d = meat_list[self.infrastructure_id][b]['box_type_3d'], # type: ignore
+                            lidar_path = meat_list[self.infrastructure_id][b]['lidar_path'], # type: ignore
+                        )
+                    )
+                    sample.gt_instances_3d = ins_list[self.infrastructure_id][b] # type: ignore
+                    sample.gt_instances_3d.pop('track_id') # no need array
+                    sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
+                    # sample.gt_instances_3d.pop('coop_isvalid') # no need array
+                    sample.gt_instances_3d.pop('correlation') # no need array
+                    sample.pred_instances_3d = pred_result[b]
+                    det_ret_list.append(sample)
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                # for idx, result in enumerate(det_ret_list):
+                #     visualizer.set_points_from_npz(result.lidar_path)
+                #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
+                #     thres = self.score_threshold
+                #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
+                #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
+                #     visualizer.just_save(f'./data/vis/det_result/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+
+                # import pdb
+                # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                return_dict['det'] = det_ret_list
+
+            if 'motion_pred' in predict_dict:
+                # seg_prediction, pred_consistent_instance_seg = predict_dict['motion_pred']
+
+                ################################ SHOW MOTION RESULT ################################
+                # if 'motion_feat' in infrastructure_feat_dict:
+                #     # fake visualization
+                #     motion_feat = single_head_feat_dict['motion_feat']
+                #     visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                #     visualizer.draw_motion_output(motion_feat, f'./data/vis/motion_output/{sample_idx}', 2, display_order='horizon', gif=True)
+
+                # import pdb
+                # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                ################################ SHOW MOTION RESULT ################################
+                return_dict['motion'] = predict_dict['motion_pred']
             
-        #     if 'motion_pred' in predict_dict:
-        #         # real return value
-        #         seg_prediction, pred_consistent_instance_seg = predict_dict['motion_pred']
-            
-        #     ################################ SHOW MOTION RESULT ################################
-        #     if 'motion_feat' in single_head_feat_dict:
-        #         # fake visualization
-        #         motion_feat = single_head_feat_dict['motion_feat']
-        #         visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
-        #         visualizer.draw_motion_output(motion_feat, f'./data/motion/{sample_idx}', 2, display_order='horizon', gif=True)
+            if 'corr_pred' in predict_dict:
+                corr_heatmaps = predict_dict['corr_pred']
 
-        #     import pdb
-        #     pdb.set_trace()
-        #     if mode == 'loss': 
-        #         return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-        #     else:
-        #         return []
-        #     ################################ SHOW MOTION RESULT ################################
+                ################################ SHOW CORRELATION HEATMAP ################################
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                # for idx, name in enumerate(ego_names):
+                #     maps = corr_heatmaps[idx][0]
+                #     visualizer.draw_featmap(maps)
+                #     visualizer.just_save(f'./data/vis/correlation_heatmap/{sample_idx}/{name}_correlation_heatmap_pred.png')
+                #     visualizer.clean()
 
-        #     return ret_list
+                # import pdb
+                # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                ################################ SHOW CORRELATION HEATMAP ################################
+                return_dict['corr'] = corr_heatmaps
+                
+            # return return_dict
+            return [] # FIXME

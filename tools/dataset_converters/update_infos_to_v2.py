@@ -156,6 +156,18 @@ def get_single_lidar_sweep():
     return single_lidar_sweep
 
 
+def get_single_lidar_sweep_v2():
+    single_lidar_sweep_v2 = dict(
+        # (float, optional) : Timestamp of the current frame.
+        timestamp=None,
+        # (list[list[float]], optional) : Transformation matrix
+        # from ego-vehicle to the global
+        sweep2key=None,
+        # (dict): Information of images captured by multiple cameras
+        lidar_points=get_empty_lidar_points())
+    return single_lidar_sweep_v2
+
+
 def get_empty_standard_data_info(
         camera_types=['CAM0', 'CAM1', 'CAM2', 'CAM3', 'CAM4']):
 
@@ -420,6 +432,15 @@ def update_deepaccident_infos(pkl_path, out_dir, keep, convert_camera_instance):
         temp_data_info['lidar_points']['lidar2ego'] = ori_info_dict['lidar_to_ego_matrix'].astype(np.float32).tolist() # type: ignore
         # bc-breaking: Timestamp has divided 1e6 in pkl infos.
         temp_data_info['timestamp'] = ori_info_dict['timestamp'] # 1 interval means 0.1s
+        if 'sweeps' in ori_info_dict.keys():
+            for ori_sweep in ori_info_dict['sweeps']:
+                temp_lidar_sweep = get_single_lidar_sweep_v2() # v2 here
+                temp_lidar_sweep['lidar_points']['num_pts_feats'] = ori_info_dict['num_features']
+                temp_lidar_sweep['lidar_points']['lidar2ego'] = ori_sweep['lidar_to_ego_matrix']
+                temp_lidar_sweep['lidar_points']['lidar_path'] = ori_sweep['lidar_path']
+                temp_lidar_sweep['sweep2key'] = ori_sweep['sweep_to_key_matrix']
+                temp_lidar_sweep['timestamp'] = ori_sweep['timestamp']
+                temp_data_info['lidar_sweeps'].append(temp_lidar_sweep)
         temp_data_info['images'] = {}
         for cam in ori_info_dict['cams']:
             empty_img_info = get_empty_img_info()

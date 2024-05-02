@@ -241,10 +241,10 @@ def semantickitti_data_prep(info_prefix, out_dir):
         info_prefix, out_dir)
 
 
-def deepaccident_data_prep(root_path, info_prefix, version, out_dir, sample_interval, keep_old_format=True, convert_camera_instance=False, sweep_size=0):
+def deepaccident_data_prep(root_path, info_prefix, version, out_dir, sample_interval, keep_old_format=True, convert_camera_instance=False, max_sweeps=0, debug=False):
     if version == 'mini':
         raise NotImplementedError('Can not handle mini version.')
-    dpac.create_deepaccident_info_file(root_path, info_prefix, out_dir, sample_interval, sweep_size=sweep_size)
+    dpac.create_deepaccident_info_file(root_path, info_prefix, out_dir, sample_interval, max_sweeps=max_sweeps, debug=debug)
     info_train_path = osp.join(out_dir, f'{info_prefix}_infos_train.pkl')
     info_val_path = osp.join(out_dir, f'{info_prefix}_infos_val.pkl')
     # info_test_path = osp.join(out_dir, f'{info_prefix}_infos_test.pkl')
@@ -290,7 +290,7 @@ parser.add_argument(
 parser.add_argument(
     '--max-sweeps',
     type=int,
-    default=10,
+    default=0,
     required=False,
     help='specify sweeps of lidar per example')
 parser.add_argument(
@@ -323,16 +323,13 @@ parser.add_argument(
     help='sample interval for deepaccident, default: 5 x 0.1s'
 )
 parser.add_argument(
-    '--sweep-size',
-    type=int,
-    default=0,
-    required=False,
-    help='history lidar sweeps for deepaccident, default: 0 no history cat'
-)
-parser.add_argument(
     '--keep',
     action='store_true',
     help='whether to keep old format file')
+parser.add_argument(
+    '--debug',
+    action='store_true',
+    help='generate 10 small amounts of data')
 parser.add_argument(
     '--convert_camera_instance',
     action='store_true',
@@ -450,7 +447,8 @@ if __name__ == '__main__':
             sample_interval=args.sample_interval,
             keep_old_format=args.keep,
             convert_camera_instance=args.convert_camera_instance,
-            sweep_size=args.sweep_size
+            max_sweeps=args.max_sweeps,
+            debug=args.debug
         )
     elif args.dataset == 'dair-v2x':
         dair_v2x_data_prep(

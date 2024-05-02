@@ -804,25 +804,14 @@ class CorrGenerateHead(BaseModule):
     def forward(self, feats: Union[List[Tensor], Tensor], ego_motion_inputs=None):
         all_ret_list = []
         if not ego_motion_inputs:
-            ret_list = []
-            feats = self.shared_conv(feats[0])
-            ret_list.append(self.corr_head(feats))
-            all_ret_list.append(ret_list)
+            all_ret_list.append([self.corr_head(self.shared_conv(feats[0]))])
             return all_ret_list
         elif not isinstance(ego_motion_inputs, Sequence):
             ego_motion_inputs = [ego_motion_inputs]
-
-        # import pdb;pdb.set_trace()
-        
         for input in ego_motion_inputs:
-            ret_list = []
             b, _, _, h, w = input.shape
             input = input.view(b, -1, h, w)
-            new_feats = [torch.cat([feats[0], input], dim=1)]
-            new_feats = self.shared_conv(new_feats[0])
-            ret_list.append(self.corr_head(new_feats))
-            all_ret_list.append(ret_list)
-        
+            all_ret_list.append([self.corr_head(self.shared_conv(torch.cat([feats[0], input], dim=1)))])
         return all_ret_list
 
     def loss_by_feat(self,
@@ -847,6 +836,14 @@ class CorrGenerateHead(BaseModule):
                 avg_factor=max(num_pos, 1))
             loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
         return loss_dict
+
+    def predict_by_feat(self, preds_dicts: Tuple[List[dict]]) -> List[Tensor]:
+        heatmaps = []
+        assert isinstance(preds_dicts, Sequence) and isinstance(preds_dicts[0], Sequence) and len(preds_dicts[0]) == 1
+        for task_id, preds_dict in enumerate(preds_dicts):
+            pred_result = preds_dict[0]
+            heatmaps.append(pred_result['heatmap'].sigmoid()) # B c H W
+        return heatmaps
 
     def prepare_ego_labels(self, batch_list, label_sampling_mode='nearest', center_sampling_mode='nearest'):
         if not isinstance(batch_list, Sequence):

@@ -3,10 +3,24 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
+# full with multi sweeps
+# train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
+# val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
+
+# full no sweeps
 # train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
-train_annfile_path = 'data/debug_dataset/deepaccident_infos_train.pkl'
-val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
-test_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
+# val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
+
+# debug with multi sweeps
+train_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+val_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+
+# debug no sweeps
+# train_annfile_path = 'data/deepaccident_debug/deepaccident_infos_train.pkl'
+# val_annfile_path = 'data/deepaccident_debug/deepaccident_infos_val.pkl'
+
+pad_delay = False
+delete_pointcloud = True
 
 classes = [
     'car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian'
@@ -27,7 +41,6 @@ det_voxel_size = [voxel_size[0] * det_out_factor, voxel_size[1] * det_out_factor
 corr_voxel_size = [voxel_size[0] * corr_out_factor, voxel_size[1] * corr_out_factor, voxel_size[2]]
 motion_voxel_size = [voxel_size[0] * motion_out_factor, voxel_size[1] * motion_out_factor, voxel_size[2]]
 
-pad_delay = False
 det_with_velocity = True
 code_size = 9
 # code_size = 7
@@ -68,6 +81,15 @@ train_pipline = [
         load_dim=4,
         use_dim=4,),
     dict(
+        type='LoadPointsFromMultiSweepsNPZ',
+        pad_delay=pad_delay,
+        # remove_point_cloud_range=mask_range,
+        remove_point_cloud_range=None,
+        coord_type='LIDAR',
+        load_dim=4,
+        use_dim=4,
+    ),
+    dict(
         type='LoadAnnotations3DV2X',
         with_bbox_3d=True,
         with_label_3d=True,
@@ -87,7 +109,6 @@ train_pipline = [
     #     flip_ratio_bev_horizontal=0.5,
     #     flip_ratio_bev_vertical=0.5),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
-    # dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range), # FIXME
     dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
     dict(type='ObjectNameFilterV2X', classes=classes),
     dict(type='ObjectTrackIDFilter', ids=[-1, ], impl=True),
@@ -107,6 +128,15 @@ test_pipline = [
         load_dim=4,
         use_dim=4,),
     dict(
+        type='LoadPointsFromMultiSweepsNPZ',
+        pad_delay=pad_delay,
+        # remove_point_cloud_range=mask_range,
+        remove_point_cloud_range=None,
+        coord_type='LIDAR',
+        load_dim=4,
+        use_dim=4,
+    ),
+    dict(
         type='LoadAnnotations3DV2X',
         with_bbox_3d=True,
         with_label_3d=True,
@@ -116,7 +146,6 @@ test_pipline = [
     dict(type='ConstructEGOBox', infrastructure_name=infrastructure_name),
     # dict(type='ObjectSample', db_sampler=db_sampler),
     dict(type='PointsRangeFilter', point_cloud_range=lidar_range),
-    # dict(type='InnerPointsRangeFilter', point_cloud_range=mask_range), # FIXME
     dict(type='ObjectRangeFilterV2X', point_cloud_range=lidar_range),
     dict(type='ObjectNameFilterV2X', classes=classes),
     dict(type='ObjectTrackIDFilter', ids=[-1, ], impl=True),
@@ -149,7 +178,7 @@ train_scene_pipline = [
         #     voxel_size=voxel_size,
         #     name='visualizer',
         # ),
-        # just_save_root = './data/correlation',
+        # just_save_root = './data/vis/train_correlation_bev_gt',
         # increment_save = True,
         verbose = False,
     ),
@@ -166,7 +195,6 @@ train_scene_pipline = [
         filter_invalid = True,
         ignore_index = 255,
     ),
-    dict(type='GatherHistoryPoint', pad_delay = pad_delay, impl = False), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
@@ -196,7 +224,7 @@ test_scene_pipline = [
         #     voxel_size=voxel_size,
         #     name='visualizer',
         # ),
-        # just_save_root = './data/correlation',
+        # just_save_root = './data/vis/test_correlation_bev_gt',
         # increment_save = True,
         verbose = False,
     ),
@@ -213,7 +241,6 @@ test_scene_pipline = [
         filter_invalid = True,
         ignore_index = 255,
     ),
-    dict(type='GatherHistoryPoint', pad_delay = pad_delay, impl = False), # FIXME
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
@@ -230,7 +257,7 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=False),
+          shuffle=True),
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path,
@@ -289,7 +316,7 @@ model = dict(
     type='CorrelationModel',
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
-        delete_pointcloud=True,
+        delete_pointcloud=delete_pointcloud,
         voxel=True,
         voxel_type = 'hard',
         voxel_layer=dict(

@@ -229,6 +229,7 @@ class SimpleLocalVisualizer(Visualizer):
 
     @master_only
     def just_save(self, save_path: str = "./bev_points.png"):
+        os.makedirs(os.path.abspath(os.path.dirname(save_path)), exist_ok=True)
         self.fig_save.savefig(save_path, bbox_inches='tight', pad_inches=0) # type: ignore
 
     @master_only
