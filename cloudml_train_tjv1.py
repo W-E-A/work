@@ -127,8 +127,8 @@ def main():
                         -p {env} \
                         -dc " mkdir data \
                             && ln -s /mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/{jceph_root} /{jceph_root} \
-                            && cd /mnt/auto-labeling/wyc/wyc-motion/deepaccident \
-                            && git checkout dev-wyc-motion \
+                            && cd /mnt/auto-labeling/wyc/wea_work/deepaccident \
+                            && git checkout dev-wea-cloud \
                             && git pull \
                             && source /root/miniconda3/bin/activate \
                             && nvidia-smi \
