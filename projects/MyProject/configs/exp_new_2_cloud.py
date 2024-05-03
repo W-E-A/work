@@ -4,16 +4,16 @@ custom_imports = dict(
 )
 
 # full with multi sweeps
-# train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
+train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
+val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
 
 # full no sweeps
 # train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
 # val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
 
 # debug with multi sweeps
-train_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-val_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+# train_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+# val_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
 
 # debug no sweeps
 # train_annfile_path = 'data/deepaccident_debug/deepaccident_infos_train.pkl'
@@ -60,7 +60,7 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 1
+batch_size = 4
 num_workers = 32
 seq_length = 8
 present_idx = 2
@@ -526,7 +526,7 @@ model = dict(
 
 lr = 1 * 1e-4
 checkpoint_interval = 2
-log_interval = 1
+log_interval = 2
 
 log_level = 'INFO'
 load_from = None
@@ -543,7 +543,7 @@ default_hooks = dict(
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
 custom_hooks = [
-    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='./gpu_messages')
+    dict(type='ShowGPUMessage', interval=10, log_level='INFO', log_dir='./gpu_messages')
 ]
 
 env_cfg = dict(
