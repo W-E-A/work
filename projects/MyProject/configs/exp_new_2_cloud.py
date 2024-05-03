@@ -537,7 +537,7 @@ default_hooks = dict(
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
 custom_hooks = [
-    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='./work_dirs/gpu_messages')
+    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/mnt/ad-infra-dataset-pilot-fusion-team/checkpoints/cyl_deep/gpu_messages')
 ]
 
 env_cfg = dict(

@@ -2,22 +2,22 @@ import os
 import argparse
 import copy
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a detector")
     parser.add_argument("--action", default="crh-s", help="{s:submit, ddd:delete, l:logs}")
     parser.add_argument("--env", default='cyl-deep', help="remote project env name")
     parser.add_argument("--config", default='projects/MyProject/configs/exp_new_2_cloud.py', help="train config file path")
-    parser.add_argument("--job_name", default='work_dirs', help="name of your job")
+    parser.add_argument("--job-name", default='work_dirs', help="name of your job")
     parser.add_argument("--node", default='LF_R4A', help="configure training node type and num. [(a/v)-(num)], a strands for a100, v stands for v100. num is the machine num")
     parser.add_argument("--branch", default="dev-wea-cloud", help="train branch")
     parser.add_argument("--jceph", default="/cyl_deep/", help="you jceph, work dir will be your_jceph/job_name. training log and checkpoint will be saved here And Do not use zx-jceph1")
     parser.add_argument('--test', action='store_true', help='use tools/dist_test.sh')
     parser.add_argument("--checkpoint", default='', help="chpt file path")
-    parser.add_argument("--gpus_per_node", default=8, help="gpus per node")
+    parser.add_argument("--gpus-per-node", default=8, help="gpus per node")
+    parser.add_argument('--batch-size', type=int, default=1, help='batch size per gpu')
+    parser.add_argument('--num-workers',type=int, default=32, help='num workers per gpu')
     args = parser.parse_args()
     return args
-
 
 def main():
     args = parse_args()
@@ -42,15 +42,16 @@ def main():
         pack_verion = print_node_num(args.node)
         work_dir = "/{}/train/{}".format(args.jceph, args.job_name)
         if args.test:  # test
+            pass
             # FIXME BUG Here
-            program = 'bash tools/dist_test.sh'
-            test_checkpoint = args.checkpoint
-            cfg_options = f"work_dir={work_dir} data.test.samples_per_gpu={args.batch_size}"
-            other_args = f"--work-dir {work_dir}"
-            test_command = f"{program} {pack_verion} {args.gpus_per_node} {args.config} {other_args}"
+            # program = 'bash tools/dist_test.sh'
+            # test_checkpoint = args.checkpoint
+            # cfg_options = f"work_dir={work_dir} data.test.samples_per_gpu={args.batch_size}"
+            # other_args = f"--work-dir {work_dir}"
+            # test_command = f"{program} {pack_verion} {args.gpus_per_node} {args.config} {other_args}"
         else:  # train
             program = 'bash tools/dist_train.sh'
-            other_args = f"--work-dir {work_dir}"
+            other_args = f"--work-dir {work_dir} --batch-size {args.batch_size} --num-workers {args.num_workers}"
             train_command = f"{program} {pack_verion} {args.gpus_per_node} {args.config} {other_args}"
         nas_secret_to_mounts = {
             'auto-labeling-tj-org': '/mnt/auto-labeling',
@@ -65,7 +66,7 @@ def main():
                         -n {args.job_name} \
                         -p {args.env} \
                         -dc " ln -s /mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/{args.jceph} /{args.jceph} \
-                            && git checkout dev-wea-cloud \
+                            && git checkout {args.branch} \
                             && git pull \
                             && source /root/miniconda3/bin/activate \
                             && nvidia-smi \
