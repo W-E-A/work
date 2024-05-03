@@ -387,8 +387,22 @@ def visualise_output(labels, output, display_order: str = 'vertical'):
     return video
 
 
-def plot_motion_prediction(motion_preds):
-    consistent_instance_seg, matched_centers = predict_instance_segmentation_and_trajectories(motion_preds, compute_matched_centers=True)
+def plot_motion_prediction(motion_preds, debug=False):
+    if debug:
+        consistent_instance_seg, matched_centers, pred_inst = predict_instance_segmentation_and_trajectories(motion_preds, compute_matched_centers=True, debug=True)
+    else:
+        consistent_instance_seg, matched_centers = predict_instance_segmentation_and_trajectories(motion_preds, compute_matched_centers=True, debug=False)
+    if debug:
+        pred_fake = []
+        for inst in pred_inst[0]:
+            unique_ids = torch.unique(inst).cpu().long().numpy()[1:]
+            instance_map = dict(zip(unique_ids, unique_ids))
+            pred_fake.append(plot_instance_map(inst.cpu().numpy(), instance_map))
+        pred_fake_match = []
+        for inst in consistent_instance_seg[0]:
+            unique_ids = torch.unique(inst).cpu().long().numpy()[1:]
+            instance_map = dict(zip(unique_ids, unique_ids))
+            pred_fake_match.append(plot_instance_map(inst.cpu().numpy(), instance_map))
     unique_ids = torch.unique(
         consistent_instance_seg[0, 0]).cpu().long().numpy()[1:]
     instance_map = dict(zip(unique_ids, unique_ids))
@@ -410,7 +424,10 @@ def plot_motion_prediction(motion_preds):
     mask = ~ np.all(trajectory_img == 0, axis=2)
     vis_image[mask] = temp_img[mask]
 
-    return vis_image
+    if debug:
+        return vis_image, pred_fake, pred_fake_match
+    else:
+        return vis_image
 
 
 def generate_instance_colours(instance_map):

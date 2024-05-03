@@ -312,6 +312,7 @@ def predict_instance_segmentation_and_trajectories(
     compute_matched_centers=False,
     make_consistent=True,
     vehicles_id=1,
+    debug=False,
 ):
     preds = output['segmentation'].detach() # B, len, 2, H, W
     preds = torch.argmax(preds, dim=2, keepdims=True)
@@ -372,13 +373,16 @@ def predict_instance_segmentation_and_trajectories(
 
         for key, value in matched_centers.items():
             matched_centers[key] = torch.stack(value).cpu().numpy()[:, ::-1]
-            print(f"{key} : {len(value)}")
+            # print(f"{key} : {len(value)}")
         # import pdb;pdb.set_trace()
-
-        return consistent_instance_seg, matched_centers
-
-    return consistent_instance_seg
-
+        if debug:
+            return consistent_instance_seg, matched_centers, pred_inst
+        else:
+            return consistent_instance_seg, matched_centers
+    if debug:
+        return consistent_instance_seg, pred_inst
+    else:
+        return consistent_instance_seg
 
 # def predict_instance_segmentation_and_trajectories_accident(
 #         output, compute_matched_centers=False, make_consistent=True, vehicles_id=1,

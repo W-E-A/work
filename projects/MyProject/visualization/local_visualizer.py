@@ -176,7 +176,7 @@ class SimpleLocalVisualizer(Visualizer):
         self.set_image(super().draw_featmap(feat, **kwargs))
         
     @master_only
-    def draw_motion_label(self, motion_label, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True, prefix: str = ''):
+    def draw_motion_label(self, motion_label, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True, prefix: str = '', debug=False):
         video = visualise_output(labels=motion_label, output=None, display_order=display_order)[0]
         
         gifs = []
@@ -201,10 +201,20 @@ class SimpleLocalVisualizer(Visualizer):
         motion_label['instance_center'] = motion_label['centerness'] # B, len, 1, h, w
         motion_label['instance_offset'] = motion_label['offset'] # B, len, 2, h, w
         motion_label['instance_flow'] = motion_label['flow'] # B, len, 2, h, w
-        figure_motion_label = plot_motion_prediction(motion_label)
-
-        figure_motion_label = Image.fromarray(figure_motion_label)
-        figure_motion_label.save(f"{save_dir}/{prefix}_motion_label_gt.png")
+        if debug:
+            figure_motion_label, pred_fake, pred_fake_match = plot_motion_prediction(motion_label, debug=True)
+            figure_motion_label = Image.fromarray(figure_motion_label)
+            figure_motion_label.save(f"{save_dir}/{prefix}_motion_label_gt.png")
+            for i, fake in enumerate(pred_fake):
+                fake_label = Image.fromarray(fake)
+                fake_label.save(f"{save_dir}/{prefix}_motion_label_gt_fake_{i}.png")
+            for i, fake in enumerate(pred_fake_match):
+                fake_label = Image.fromarray(fake)
+                fake_label.save(f"{save_dir}/{prefix}_motion_label_gt_fake_match_{i}.png")
+        else:
+            figure_motion_label = plot_motion_prediction(motion_label, debug=False)
+            figure_motion_label = Image.fromarray(figure_motion_label)
+            figure_motion_label.save(f"{save_dir}/{prefix}_motion_label_gt.png")
 
     @master_only
     def draw_motion_output(self, motion_output, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True):

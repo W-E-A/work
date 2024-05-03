@@ -413,8 +413,6 @@ class CorrelationFilter(BaseTransform):
     def __init__(self,
         infrastructure_name: str = 'infrastructure',
         with_velocity: bool = True,
-        only_vehicle: bool = False,
-        vehicle_id_list: list = [0, 1, 2],
         ego_id: int = -100,
         min_distance_thres: float = 5,
         max_distance_thres: float = 20,
@@ -428,8 +426,6 @@ class CorrelationFilter(BaseTransform):
     ) -> None:
         self.infrastructure_name = infrastructure_name
         self.with_velocity = with_velocity
-        self.only_vehicle = only_vehicle
-        self.vehicle_id_list = vehicle_id_list
         self.ego_id = ego_id
         self.min_distance_thres = min_distance_thres
         self.max_distance_thres = max_distance_thres
@@ -529,9 +525,9 @@ class CorrelationFilter(BaseTransform):
         for i, timestamp in enumerate(future_seq_position):
             gt_instances_3d = example_seq[timestamp][infrastructure_idx]['data_samples'].gt_instances_3d.clone()
 
-            if self.only_vehicle:
-                vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
-                gt_instances_3d = gt_instances_3d[vehicle_mask]
+            # if self.only_vehicle:
+            #     vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
+            #     gt_instances_3d = gt_instances_3d[vehicle_mask]
 
             # gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target bug do not modify
 

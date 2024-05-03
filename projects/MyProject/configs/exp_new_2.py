@@ -73,6 +73,10 @@ sample_key_interval = 1
 # )
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
+motion_only_vehicle = False
+motion_filter_invalid = False
+corr_only_vehicle = False
+vehicle_id_list = [0, 1, 2] # agents 'car', 'van', 'truck'
 
 train_pipline = [
     dict(
@@ -164,8 +168,6 @@ train_scene_pipline = [
         type = 'CorrelationFilter',
         infrastructure_name = infrastructure_name,
         with_velocity = det_with_velocity,
-        only_vehicle = False,
-        vehicle_id_list = [0, 1, 2],
         ego_id = -100,
         min_distance_thres = 5,
         max_distance_thres = 20,
@@ -190,9 +192,9 @@ train_scene_pipline = [
         mode = 'normal',
         just_present = False,
         ego_id = -100,
-        only_vehicle = False,
-        vehicle_id_list = [0, 1, 2],
-        filter_invalid = True,
+        only_vehicle = motion_only_vehicle,
+        vehicle_id_list = vehicle_id_list,
+        filter_invalid = motion_filter_invalid,
         ignore_index = 255,
     ),
     dict(
@@ -203,9 +205,6 @@ train_scene_pipline = [
         mode = 'ego',
         just_present = False,
         ego_id = -100,
-        only_vehicle = False,
-        vehicle_id_list = [0, 1, 2],
-        filter_invalid = True,
         ignore_index = 255,
     ),
     dict(
@@ -214,8 +213,8 @@ train_scene_pipline = [
         voxel_size = corr_voxel_size,
         infrastructure_name = infrastructure_name,
         mode = 'corr',
-        only_vehicle = False,
-        vehicle_id_list = [0, 1, 2],
+        only_vehicle = corr_only_vehicle,
+        vehicle_id_list = vehicle_id_list,
     ),
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
@@ -232,8 +231,6 @@ test_scene_pipline = [
         type = 'CorrelationFilter',
         infrastructure_name = infrastructure_name,
         with_velocity = det_with_velocity,
-        only_vehicle = False,
-        vehicle_id_list = [0, 1, 2],
         ego_id = -100,
         min_distance_thres = 5,
         max_distance_thres = 20,
@@ -258,9 +255,6 @@ test_scene_pipline = [
         mode = 'ego',
         just_present = False,
         ego_id = -100,
-        only_vehicle = False,
-        vehicle_id_list = [0, 1, 2],
-        filter_invalid = True,
         ignore_index = 255,
     ),
     # dict(type='DestoryEGOBox', ego_id = -100),
@@ -279,7 +273,7 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=True),
+          shuffle=False),
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path,
@@ -543,7 +537,7 @@ default_hooks = dict(
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
 custom_hooks = [
-    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='./gpu_messages')
+    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='./work_dirs/gpu_messages')
 ]
 
 env_cfg = dict(
