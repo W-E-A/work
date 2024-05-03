@@ -400,10 +400,10 @@ model = dict(
     #     sigma=1.0,
     #     impl=True,
     # ),
-    # temporal_backbone=dict(
-    #     type='TemporalIdentity',
-    #     position='last'
-    # ),
+    temporal_backbone=dict(
+        type='TemporalIdentity',
+        position='last'
+    ),
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
@@ -467,7 +467,7 @@ model = dict(
             type='CorrGenerateHead',
             pc_range=lidar_range,
             voxel_size=corr_voxel_size,
-            n_future_and_present=seq_length - present_idx, # future and present
+            n_present_and_future=seq_length - present_idx, # future and present
             label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
             in_channels=sum([128, 128, 128]),
             loss_corr=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),

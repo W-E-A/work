@@ -20,7 +20,7 @@ class CorrelationModel(MVXTwoStageDetector):
                  pts_fusion_layer: Optional[dict] = None,
                  pts_backbone: Optional[dict] = None,
                  pts_neck: Optional[dict] = None,
-                #  temporal_backbone: Optional[dict] = None,
+                 temporal_neck: Optional[dict] = None,
                  multi_task_head: Optional[dict] = None,
                 #  train_comm_expand_layer: Optional[dict] = None,
                 #  test_comm_expand_layer: Optional[dict] = None,
@@ -48,6 +48,9 @@ class CorrelationModel(MVXTwoStageDetector):
             multi_task_head.update(train_cfg = pts_train_cfg)
             multi_task_head.update(test_cfg = pts_test_cfg)
             self.multi_task_head = MODELS.build(multi_task_head)
+
+        if temporal_neck:
+            self.temporal_neck = MODELS.build(temporal_neck)
         
         if self.pts_train_cfg:
             pass

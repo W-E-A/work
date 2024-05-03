@@ -745,7 +745,7 @@ class CorrGenerateHead(BaseModule):
         self,
         pc_range,
         voxel_size,
-        n_future_and_present: int = 0,
+        n_present_and_future: int = 0,
         label_size: int = 6,
         in_channels: Union[List[int], int] = [128],
         loss_corr: dict = dict(
@@ -775,7 +775,7 @@ class CorrGenerateHead(BaseModule):
             np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
         ]).astype(np.int32)
         self.warper = FeatureWarper(self.pc_range)
-        self.add_channels = n_future_and_present * label_size
+        self.add_channels = n_present_and_future * label_size
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.in_channels = in_channels

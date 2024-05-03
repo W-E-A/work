@@ -396,7 +396,7 @@ class GatherV2XPoseInfo(BaseTransform):
         future_motion_matrix = []
         future_motion_rela_matrix = []
         for j in range(co_length):
-            future_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in future_seq]
+            future_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['lidar2ego']) @ np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in future_seq]
             temp = [np.eye(4, dtype=np.float32)]
             temp.extend(list(map(calc_relative_pose, future_motion_list[1:], future_motion_list[:-1])))
             future_motion_rela_matrix.append(np.stack(temp, axis=0))
