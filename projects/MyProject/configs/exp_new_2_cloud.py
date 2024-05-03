@@ -4,20 +4,20 @@ custom_imports = dict(
 )
 
 # full with multi sweeps
-train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
-val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
+train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
+val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
 
 # full no sweeps
-# train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
+# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
+# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
 
 # debug with multi sweeps
-# train_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
 
 # debug no sweeps
-# train_annfile_path = 'data/deepaccident_debug/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident_debug/deepaccident_infos_val.pkl'
+# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
+# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
 
 use_multi_sweeps = True
 delete_pointcloud = True
