@@ -4,22 +4,22 @@ custom_imports = dict(
 )
 
 # full with multi sweeps
-# train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
+train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
+val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
 
 # full no sweeps
 # train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
 # val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
 
 # debug with multi sweeps
-train_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-val_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+# train_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+# val_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
 
 # debug no sweeps
 # train_annfile_path = 'data/deepaccident_debug/deepaccident_infos_train.pkl'
 # val_annfile_path = 'data/deepaccident_debug/deepaccident_infos_val.pkl'
 
-pad_delay = False
+use_multi_sweeps = True
 delete_pointcloud = True
 
 classes = [
@@ -61,7 +61,7 @@ det_common_heads = dict(
 )
 
 batch_size = 1
-num_workers = 1
+num_workers = 32
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
@@ -82,7 +82,7 @@ train_pipline = [
         use_dim=4,),
     dict(
         type='LoadPointsFromMultiSweepsNPZ',
-        pad_delay=pad_delay,
+        use_multi_sweeps=use_multi_sweeps,
         # remove_point_cloud_range=mask_range,
         remove_point_cloud_range=None,
         coord_type='LIDAR',
@@ -129,7 +129,7 @@ test_pipline = [
         use_dim=4,),
     dict(
         type='LoadPointsFromMultiSweepsNPZ',
-        pad_delay=pad_delay,
+        use_multi_sweeps=use_multi_sweeps,
         # remove_point_cloud_range=mask_range,
         remove_point_cloud_range=None,
         coord_type='LIDAR',
@@ -187,13 +187,35 @@ train_scene_pipline = [
         pc_range = motion_range,
         voxel_size = motion_voxel_size,
         infrastructure_name = infrastructure_name,
-        corr_pc_range = lidar_range,
-        corr_voxel_size = corr_voxel_size,
+        mode = 'normal',
+        just_present = False,
         ego_id = -100,
         only_vehicle = False,
         vehicle_id_list = [0, 1, 2],
         filter_invalid = True,
         ignore_index = 255,
+    ),
+    dict(
+        type = 'MakeMotionLabels',
+        pc_range = lidar_range,
+        voxel_size = corr_voxel_size,
+        infrastructure_name = infrastructure_name,
+        mode = 'ego',
+        just_present = False,
+        ego_id = -100,
+        only_vehicle = False,
+        vehicle_id_list = [0, 1, 2],
+        filter_invalid = True,
+        ignore_index = 255,
+    ),
+    dict(
+        type = 'MakeMotionLabels',
+        pc_range = lidar_range,
+        voxel_size = corr_voxel_size,
+        infrastructure_name = infrastructure_name,
+        mode = 'corr',
+        only_vehicle = False,
+        vehicle_id_list = [0, 1, 2],
     ),
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
@@ -230,11 +252,11 @@ test_scene_pipline = [
     ),
     dict(
         type = 'MakeMotionLabels',
-        pc_range = motion_range,
-        voxel_size = motion_voxel_size,
+        pc_range = lidar_range,
+        voxel_size = corr_voxel_size,
         infrastructure_name = infrastructure_name,
-        corr_pc_range = lidar_range,
-        corr_voxel_size = corr_voxel_size,
+        mode = 'ego',
+        just_present = False,
         ego_id = -100,
         only_vehicle = False,
         vehicle_id_list = [0, 1, 2],
@@ -327,7 +349,7 @@ model = dict(
     ), # train, test voxel/pillar size
     pts_voxel_encoder = dict(
         type = 'PillarFeatureNet',
-        in_channels = 5 if pad_delay else 4,
+        in_channels = 5 if use_multi_sweeps else 4,
         feat_channels = (64, ),
         with_distance = False,
         with_cluster_center = True,
@@ -477,7 +499,7 @@ model = dict(
 
         corr_dense_reg=1,
         corr_max_objs=500,
-        corr_gaussian_overlap=0.1,
+        corr_gaussian_overlap=0.5,
         corr_min_radius=2
     ),
     pts_test_cfg=dict(

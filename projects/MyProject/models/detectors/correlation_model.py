@@ -187,12 +187,12 @@ class CorrelationModel(MVXTwoStageDetector):
         #     else:
         #         log("no points to visualize, please check the config file.", logging.WARN)
         
-        import pdb
-        pdb.set_trace()
-        if mode == 'loss': 
-            return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
-        else:
-            return []
+        # import pdb
+        # pdb.set_trace()
+        # if mode == 'loss': 
+        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        # else:
+        #     return []
         ################################ INPUT DEBUG (stop here) ################################
 
         # infrastructure的所有输入
@@ -271,7 +271,9 @@ class CorrelationModel(MVXTwoStageDetector):
             motion_loss_kwargs = {
                 'training_labels':infrastructure_label # necessary
             }
-            corr_heatmaps = self.multi_task_head.corr_head.get_corr_heatmaps(infrastructure_instances)
+            # corr_heatmaps = self.multi_task_head.corr_head.get_corr_heatmaps(infrastructure_instances)
+            corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+            corr_heatmaps_label = self.multi_task_head.corr_head.prepare_corr_heatmaps(corr_heatmaps) # c-1, B, 1, h, w
             ################################ SHOW CORRELATION HEATMAP ################################
             # assert batch_size == 1
             # scene_info_0.pop('pose_matrix')
@@ -282,7 +284,7 @@ class CorrelationModel(MVXTwoStageDetector):
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
 
             # for idx, name in enumerate(ego_names):
-            #     maps = corr_heatmaps[idx][0]
+            #     maps = corr_heatmaps_label[idx][0]
             #     visualizer.draw_featmap(maps)
             #     visualizer.just_save(f'./data/vis/correlation_heatmap/{sample_idx}/{name}_correlation_heatmap_gt.png')
             #     visualizer.clean()
@@ -295,9 +297,9 @@ class CorrelationModel(MVXTwoStageDetector):
             #     return []
             ################################ SHOW CORRELATION HEATMAP ################################
             corr_loss_kwargs = {
-                'heatmaps':corr_heatmaps,# necessary
+                'heatmaps':corr_heatmaps_label,# necessary
                 'loss_names':ego_names, # optional
-                'gt_thres':0.3 # optional
+                'gt_thres':0 # optional
             }
 
             loss_dict = self.multi_task_head.loss(

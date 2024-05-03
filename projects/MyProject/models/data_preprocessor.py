@@ -19,14 +19,18 @@ class DeepAccidentDataPreprocessor(Det3DDataPreprocessor):
         casted_example_seq = [ [ {} for j in range(co_length)] for i in range(seq_length)]
         for i in range(seq_length): # type: ignore
             for j in range(co_length):
-                # import pdb;pdb.set_trace()
                 input_dict = data['example_seq'][i][j] # type: ignore
                 casted_example_seq[i][j] = self.simple_process(input_dict, training) # type: ignore
                 if self.delete_pointcloud:
                     if 'points' in casted_example_seq[i][j]['inputs'].keys():
                         casted_example_seq[i][j]['inputs'].pop('points')
                 if i == present_idx:
-                    casted_example_seq[i][j]['motion_label'] = self.cast_data(input_dict['motion_label'])
+                    if 'motion_label' in input_dict.keys(): # if motion
+                        casted_example_seq[i][j]['motion_label'] = self.cast_data(input_dict['motion_label'])
                     if 'ego_motion_label' in input_dict.keys(): # if ego
                         casted_example_seq[i][j]['ego_motion_label'] = self.cast_data(input_dict['ego_motion_label'])
+                    if 'inf_motion_label' in input_dict.keys(): # if inf
+                        casted_example_seq[i][j]['inf_motion_label'] = self.cast_data(input_dict['inf_motion_label'])
+                    if 'corr_heatmaps' in input_dict.keys(): # if corr
+                        casted_example_seq[i][j]['corr_heatmaps'] = self.cast_data(input_dict['corr_heatmaps'])
         return {'scene_info': casted_scene_info, 'example_seq': casted_example_seq}

@@ -48,14 +48,14 @@ class LoadPointsNPZ(LoadPointsFromFile):
 @TRANSFORMS.register_module()
 class LoadPointsFromMultiSweepsNPZ(BaseTransform):
     def __init__(self,
-        pad_delay: bool = False,
+        use_multi_sweeps: bool = False,
         remove_point_cloud_range: Optional[List[float]] = None,
         pad_empty_sweeps: int = 0,
         del_sweeps: bool = True,
         *args,
         **kwargs,) -> None:
         self.loader = LoadPointsNPZ(*args, **kwargs)
-        self.pad_delay = pad_delay
+        self.use_multi_sweeps = use_multi_sweeps
         self.remove_point_cloud_range = remove_point_cloud_range
         self.pad_empty_sweeps = pad_empty_sweeps
         self.del_sweeps = del_sweeps
@@ -68,7 +68,7 @@ class LoadPointsFromMultiSweepsNPZ(BaseTransform):
     def transform(self, results: dict) -> dict:
         assert 'points' in results.keys()
         points = results['points'] # BasePoints
-        if self.pad_delay:
+        if self.use_multi_sweeps:
             dtype = points.tensor.dtype
             device = points.tensor.device
             points.tensor = torch.cat([points.tensor, torch.full((points.tensor.shape[0], 1), 0.0).to(dtype).to(device)], dim=1)
@@ -76,28 +76,28 @@ class LoadPointsFromMultiSweepsNPZ(BaseTransform):
         if self.remove_point_cloud_range:
             points = self._remove_inner_range(points, self.remove_point_cloud_range)
         sweep_points_list = [points]
-        ts = results['timestamp']
-        if 'lidar_sweeps' not in results:
-            if self.pad_empty_sweeps > 0:
-                for i in range(self.pad_empty_sweeps):
-                    sweep_points_list.append(points)
-        else:
-            for sweep in results['lidar_sweeps']:
-                sweep_ts = sweep['timestamp']
-                sweep2key = sweep['sweep2key']
-                points_sweep = self.loader.transform(sweep)['points']
-                if self.pad_delay:
+        if self.use_multi_sweeps:
+            ts = results['timestamp']
+            if 'lidar_sweeps' not in results:
+                if self.pad_empty_sweeps > 0:
+                    for i in range(self.pad_empty_sweeps):
+                        sweep_points_list.append(points)
+            else:
+                for sweep in results['lidar_sweeps']:
+                    sweep_ts = sweep['timestamp']
+                    sweep2key = sweep['sweep2key']
+                    points_sweep = self.loader.transform(sweep)['points']
                     dtype = points_sweep.tensor.dtype
                     device = points_sweep.tensor.device
                     points_sweep.tensor = torch.cat([points_sweep.tensor, torch.full((points_sweep.tensor.shape[0], 1), 0.1 * (ts - sweep_ts)).to(dtype).to(device)], dim=1)
                     points_sweep.points_dim = points_sweep.tensor.shape[-1]
-                if self.remove_point_cloud_range:
-                    points_sweep = self._remove_inner_range(points_sweep, self.remove_point_cloud_range)
-                sweep_points_list.append(points_sweep.convert_to(Coord3DMode.LIDAR, sweep2key))
+                    if self.remove_point_cloud_range:
+                        points_sweep = self._remove_inner_range(points_sweep, self.remove_point_cloud_range)
+                    sweep_points_list.append(points_sweep.convert_to(Coord3DMode.LIDAR, sweep2key))
+            if self.del_sweeps and 'lidar_sweeps' in results:
+                results.pop('lidar_sweeps')
         points = points.cat(sweep_points_list)
         results['points'] = points
-        if self.del_sweeps and 'lidar_sweeps' in results:
-            results.pop('lidar_sweeps')
         return results
 
 
@@ -677,7 +677,7 @@ class CorrelationFilter(BaseTransform):
                     self.visualizer.clean()
         
         correlation_list = torch.stack(correlation_list, dim=1) # N, x
-        example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d['correlation'] = correlation_list
+        example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d['correlations'] = correlation_list
         
         return input_dict
 
@@ -688,8 +688,8 @@ class MakeMotionLabels(BaseTransform):
         pc_range,
         voxel_size,
         infrastructure_name: str = 'infrastructure',
-        corr_pc_range = None,
-        corr_voxel_size = None,
+        mode: str = 'normal',
+        just_present: bool = False,
         ego_id: int = -100,
         only_vehicle: bool = False,
         vehicle_id_list: list = [0, 1, 2],
@@ -711,23 +711,13 @@ class MakeMotionLabels(BaseTransform):
         ]).astype(np.float32)
         self.warp_size = (0.5 * (self.pc_range[3] - self.pc_range[0]), 0.5 * (self.pc_range[4] - self.pc_range[1]))
 
-        self.corr_enable = False
-        if (corr_pc_range is not None and corr_voxel_size is not None):
-            self.corr_enable = True
-            self.corr_pc_range = corr_pc_range
-            self.corr_voxel_size = corr_voxel_size
-            self.corr_voxel_size = np.array(self.corr_voxel_size).astype(np.float32)
-            self.corr_grid_size = np.array([
-                np.round((self.corr_pc_range[4] - self.corr_pc_range[1]) / self.corr_voxel_size[1]), # H
-                np.round((self.corr_pc_range[3] - self.corr_pc_range[0]) / self.corr_voxel_size[0]), # W
-                np.round((self.corr_pc_range[5] - self.corr_pc_range[2]) / self.corr_voxel_size[2]), # D
-            ]).astype(np.int32)
-            self.corr_offset_xy = np.array([
-                self.corr_pc_range[0] + self.corr_voxel_size[0] * 0.5,
-                self.corr_pc_range[1] + self.corr_voxel_size[1] * 0.5
-            ]).astype(np.float32)
-            self.corr_warp_size = (0.5 * (self.corr_pc_range[3] - self.corr_pc_range[0]), 0.5 * (self.corr_pc_range[4] - self.corr_pc_range[1]))
-
+        self.mode = mode
+        assert self.mode in ('normal', 'ego', 'inf', 'corr')
+        # normal 返回所有目标的motion
+        # ego 返回所有ego自己在inf坐标系的motion
+        # inf 仅返回inf的所有目标的motion
+        # corr 必须先运行CorrelationFilter使得infra的每个目标有个打分
+        self.just_present = just_present
         self.infrastructure_name = infrastructure_name
         self.ego_id = ego_id
         self.only_vehicle = only_vehicle
@@ -755,122 +745,117 @@ class MakeMotionLabels(BaseTransform):
         infrastructure_idx = co_agents.index(self.infrastructure_name)
         inf_motion_rela_matrix = future_motion_rela_matrix[infrastructure_idx]
 
-        for j, agent in enumerate(co_agents):
-            
-            track_map = {}
-            segmentations = []
-            instances = []
-            for i, timestamp in enumerate(future_seq_position):
-                gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
-
-                if gt_instances_3d.bboxes_3d is None:
-                    segmentation = np.ones(
-                        (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
-                    instance = np.ones_like(segmentation) * self.ignore_index
-                else:
-                    segmentation = np.zeros((self.grid_size[0], self.grid_size[1])) # H, W
-                    instance = np.zeros_like(segmentation)    
-
-                if self.only_vehicle:
-                    vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
-                    gt_instances_3d = gt_instances_3d[vehicle_mask]
-                
-                if self.filter_invalid:
-                    gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid]
-
-                bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
-                bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
-
+        if self.mode == 'corr':
+            corr_heatmaps = []
+            gt_instances_3d = example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d.clone()
+            assert 'correlations' in gt_instances_3d.keys()
+            if self.only_vehicle:
+                vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
+                gt_instances_3d = gt_instances_3d[vehicle_mask]
+            # if self.filter_invalid: # do not modify
+            #     gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # do not modify
+            bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
+            bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
+            correlations = gt_instances_3d.correlations
+            for j in range(len(co_agents) - 1):
+                correlation = correlations[:, j]
+                corr_heatmap = np.zeros((self.grid_size[0], self.grid_size[1]))
+                mask = np.zeros((self.grid_size[0], self.grid_size[1]))
                 for index, id in enumerate(gt_instances_3d.track_id):
-                    if id not in track_map:
-                        track_map[id] = len(track_map) + 1
-                    instance_id = track_map[id]
+                    score = correlation[index].item()
                     poly_region = bbox_corners_voxel[index]
-                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
-                    cv2.fillPoly(instance, [poly_region], instance_id) # 实例分割为0~254
-
-                segmentations.append(segmentation)
-                instances.append(instance)
-
-            segmentations = np.stack(segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
-            instances = np.stack(instances, axis=0).astype(np.int32) # [fu_len, H, W]
-
-            instance_centerness, instance_offset, instance_flow = convert_instance_mask_to_center_and_offset_label(
-                instances,
-                future_motion_rela_matrix[j],
-                len(track_map),
-                ignore_index = self.ignore_index,
-                spatial_extent = self.warp_size,
-            ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
-
-            # 如果分割有任何是没有box的则清除中心度为ignore
-            invalid_mask = (segmentations[:, 0, 0] == self.ignore_index)
-            instance_centerness[invalid_mask] = self.ignore_index
-            motion_label = {
-                'motion_segmentation': torch.from_numpy(segmentations).float(), # [fu_len, H, W]
-                'motion_instance': torch.from_numpy(instances).float(), # [fu_len, H, W]
-                'instance_centerness': torch.from_numpy(instance_centerness).float(), # len, 1, h, w
-                'instance_offset': torch.from_numpy(instance_offset).float(), # len, 2, h, w
-                'instance_flow': torch.from_numpy(instance_flow).float(), # len, 2, h, w invalid at last
-                'future_egomotion': torch.from_numpy(future_motion_rela_matrix[j]) # len, 4, 4 ident at 0
-            }
-            input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
-
-            if agent != self.infrastructure_name and self.corr_enable:
-                ego_segmentations = []
-                ego_instances = []
+                    cv2.fillPoly(corr_heatmap, [poly_region], score)
+                    # cv2.line(mask, poly_region[0], poly_region[1], 1)
+                # mask = mask > 0
+                # zero_mask = corr_heatmap > 0
+                # new_heatmap = cv2.GaussianBlur(corr_heatmap[mask], (5, 5), 0)
+                # print(zero_mask.shape)
+                # print(new_heatmap.shape)
+                # print(corr_heatmap.shape)
+                # new_heatmap[zero_mask] = corr_heatmap[zero_mask]
+                corr_heatmap = cv2.GaussianBlur(corr_heatmap, (5, 5), 0)
+                corr_heatmaps.append(corr_heatmap)
+            corr_heatmaps = torch.from_numpy(np.stack(corr_heatmaps, axis=0)).float() # c-1, H, W
+            input_dict['example_seq'][present_idx][infrastructure_idx]['corr_heatmaps'] = corr_heatmaps
+        else:
+            for j, agent in enumerate(co_agents):
+                if self.mode == 'ego' and agent == self.infrastructure_name:
+                    continue
+                if self.mode == 'inf' and agent != self.infrastructure_name:
+                    continue
+                track_map = {}
+                segmentations = []
+                instances = []
                 for i, timestamp in enumerate(future_seq_position):
+                    if self.just_present and i != 0:
+                        break
                     gt_instances_3d = example_seq[timestamp][j]['data_samples'].gt_instances_3d.clone()
-                    ego_mask = gt_instances_3d.track_id == self.ego_id
-                    gt_instances_3d = gt_instances_3d[ego_mask]
-                    assert len(gt_instances_3d) == 1 # ego only, must construct the ego bbox
+                    if self.mode == 'ego':
+                        ego_mask = gt_instances_3d.track_id == self.ego_id
+                        gt_instances_3d = gt_instances_3d[ego_mask]
+                        assert len(gt_instances_3d) == 1 # ego only, must construct the ego bbox
 
                     if gt_instances_3d.bboxes_3d is None:
                         segmentation = np.ones(
-                            (self.corr_grid_size[0], self.corr_grid_size[1])) * self.ignore_index # H, W
+                            (self.grid_size[0], self.grid_size[1])) * self.ignore_index # H, W
                         instance = np.ones_like(segmentation) * self.ignore_index
                     else:
-                        segmentation = np.zeros((self.corr_grid_size[0], self.corr_grid_size[1])) # H, W
-                        instance = np.zeros_like(segmentation)
-
-                    trans = future_pose_matrix[i, infrastructure_idx, j, ...] # 4, 4
-                    gt_instances_3d.bboxes_3d.rotate(trans[:3, :3].T, None)
-                    gt_instances_3d.bboxes_3d.translate(trans[:3, 3])
-                    bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
-                    bbox_corners_voxel = np.round((bbox_corners - self.corr_offset_xy) / self.corr_voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
-
-                    poly_region = bbox_corners_voxel[0]
-                    cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
-                    cv2.fillPoly(instance, [poly_region], 1) # ego only so 1
+                        segmentation = np.zeros((self.grid_size[0], self.grid_size[1])) # H, W
+                        instance = np.zeros_like(segmentation)    
+                    if not self.mode == 'ego':
+                        if self.only_vehicle:
+                            vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
+                            gt_instances_3d = gt_instances_3d[vehicle_mask]
                         
-                    ego_segmentations.append(segmentation)
-                    ego_instances.append(instance)
+                        if self.filter_invalid:
+                            gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid]
 
-                ego_segmentations = np.stack(ego_segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
-                ego_instances = np.stack(ego_instances, axis=0).astype(np.int32) # [fu_len, H, W]
-                
-                ego_instance_centerness, ego_instance_offset, ego_instance_flow = convert_instance_mask_to_center_and_offset_label(
-                    ego_instances,
-                    inf_motion_rela_matrix,
-                    1, # ego only
+                    if self.mode == 'ego':
+                        trans = future_pose_matrix[i, infrastructure_idx, j, ...] # 4, 4
+                        gt_instances_3d.bboxes_3d.rotate(trans[:3, :3].T, None)
+                        gt_instances_3d.bboxes_3d.translate(trans[:3, 3])
+                    bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
+                    bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
+
+                    for index, id in enumerate(gt_instances_3d.track_id):
+                        if id not in track_map:
+                            track_map[id] = len(track_map) + 1
+                        instance_id = track_map[id]
+                        poly_region = bbox_corners_voxel[index]
+                        cv2.fillPoly(segmentation, [poly_region], 1.0) # 语义分割为01
+                        cv2.fillPoly(instance, [poly_region], instance_id) # 实例分割为0~254
+
+                    segmentations.append(segmentation)
+                    instances.append(instance)
+
+                segmentations = np.stack(segmentations, axis=0).astype(np.int32) # [fu_len, H, W]
+                instances = np.stack(instances, axis=0).astype(np.int32) # [fu_len, H, W]
+
+                instance_centerness, instance_offset, instance_flow = convert_instance_mask_to_center_and_offset_label(
+                    instances,
+                    future_motion_rela_matrix[j] if not self.mode == 'ego' else inf_motion_rela_matrix,
+                    len(track_map),
                     ignore_index = self.ignore_index,
-                    spatial_extent = self.corr_warp_size,
+                    spatial_extent = self.warp_size,
                 ) # len, 1, h, w  len, 2, h, w  len, 2, h, w
 
                 # 如果分割有任何是没有box的则清除中心度为ignore
-                invalid_mask = (ego_segmentations[:, 0, 0] == self.ignore_index)
-                ego_instance_centerness[invalid_mask] = self.ignore_index
-                ego_motion_label = {
-                    'motion_segmentation': torch.from_numpy(ego_segmentations).float(), # [fu_len, H, W]
-                    'motion_instance': torch.from_numpy(ego_instances).float(), # [fu_len, H, W]
-                    'instance_centerness': torch.from_numpy(ego_instance_centerness).float(), # len, 1, h, w
-                    'instance_offset': torch.from_numpy(ego_instance_offset).float(), # len, 2, h, w
-                    'instance_flow': torch.from_numpy(ego_instance_flow).float(), # len, 2, h, w invalid at last
-                    'future_egomotion': torch.from_numpy(inf_motion_rela_matrix), # len, 4, 4 ident at 0
-                    # 'future_pose_matrix': torch.from_numpy(future_pose_matrix[:, infrastructure_idx, j, ...]) # len, 4, 4 ego to infrastructure
+                invalid_mask = (segmentations[:, 0, 0] == self.ignore_index)
+                instance_centerness[invalid_mask] = self.ignore_index
+                motion_label = {
+                    'motion_segmentation': torch.from_numpy(segmentations).float(), # [fu_len, H, W]
+                    'motion_instance': torch.from_numpy(instances).float(), # [fu_len, H, W]
+                    'instance_centerness': torch.from_numpy(instance_centerness).float(), # len, 1, h, w
+                    'instance_offset': torch.from_numpy(instance_offset).float(), # len, 2, h, w
+                    'instance_flow': torch.from_numpy(instance_flow).float(), # len, 2, h, w invalid at last
+                    'future_egomotion': torch.from_numpy(future_motion_rela_matrix[j] if not self.mode == 'ego' else inf_motion_rela_matrix), # len, 4, 4 ident at 0
                 }
-                input_dict['example_seq'][present_idx][j]['ego_motion_label'] = ego_motion_label
-                # print(input_dict['example_seq'][present_idx][j].keys())
+                if self.mode == 'ego':
+                    input_dict['example_seq'][present_idx][j]['ego_motion_label'] = motion_label
+                elif self.mode == 'inf':
+                    input_dict['example_seq'][present_idx][j]['inf_motion_label'] = motion_label
+                else:
+                    input_dict['example_seq'][present_idx][j]['motion_label'] = motion_label
         return input_dict
 
 

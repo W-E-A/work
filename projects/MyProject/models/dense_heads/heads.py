@@ -827,7 +827,6 @@ class CorrGenerateHead(BaseModule):
         # import pdb;pdb.set_trace()
         for name, pred_result, heatmap in zip(names, preds_list, heatmaps):
             pred_result = pred_result[0]
-            heatmap = heatmap[0] # b, 1, h, w
             num_pos = heatmap.gt(gt_thres).float().sum().item() # 需要调整
             pred_result['heatmap'] = clip_sigmoid(pred_result['heatmap'])
             loss_heatmap = self.loss_corr(
@@ -912,6 +911,11 @@ class CorrGenerateHead(BaseModule):
 
         return_list = tuple(map(list, zip(*return_list)))
         return return_list
+
+    def prepare_corr_heatmaps(self, input):
+        # intput list of c-1 h w tensor
+        input = torch.stack(input, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous() # c-1, B, 1, h, w
+        return input
 
     def get_corr_heatmaps(
         self,
