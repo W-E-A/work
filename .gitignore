@@ -119,6 +119,7 @@ exps/
 *~
 mmdet3d/.mim
 TODO
+temp.py
 
 # Pytorch
 *.pth

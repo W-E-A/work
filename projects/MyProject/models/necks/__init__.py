@@ -1,3 +1,3 @@
-from .temporal_necks import TemporalIdentity, TemporalNaive
+from .temporal_necks import TemporalIdentity, TemporalNaive, Temporal3DConvModel
 
-__all__ = ['TemporalIdentity', 'TemporalNaive']
+__all__ = ['TemporalIdentity', 'TemporalNaive', 'Temporal3DConvModel']

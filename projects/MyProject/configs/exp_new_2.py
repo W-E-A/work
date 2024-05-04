@@ -219,7 +219,7 @@ train_scene_pipline = [
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
-    dict(type='RemoveHistoryInputs'),
+    # dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
@@ -260,7 +260,7 @@ test_scene_pipline = [
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
-    dict(type='RemoveHistoryInputs'),
+    # dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
@@ -400,9 +400,22 @@ model = dict(
     #     sigma=1.0,
     #     impl=True,
     # ),
-    temporal_backbone=dict(
-        type='TemporalIdentity',
-        position='last'
+    # temporal_neck=dict(
+    #     type='TemporalIdentity',
+    #     position='last'
+    # ),
+    temporal_neck=dict(
+        type='Temporal3DConvModel',
+        pc_range=lidar_range,
+        in_channels=sum([128, 128, 128]),
+        n_history_and_present=present_idx+1,
+        input_shape=(128, 128), # 256, 256 or 128, 128 or 64, 64
+        inter_channels=192, # 384 -> 192 -> ...
+        extra_in_channels=192, # channel expand
+        n_spatial_layers_between_temporal_layers=0,
+        use_pyramid_pooling=True, # input shape pooling
+        input_egopose=False, # cat 6 DOF info
+        with_skip_connect=True, # pred residual
     ),
     multi_task_head=dict(
         type='MTHead',
@@ -443,10 +456,10 @@ model = dict(
             },
             distribution_log_sigmas=[-5.0, 5.0],
             class_weights=[1.0, 2.0],
-            in_channels=384,
+            in_channels=sum([128, 128, 128]),
             prob_latent_dim=32,
-            receptive_field=3,
-            n_future=5,
+            receptive_field=present_idx + 1,
+            n_future=seq_length - present_idx - 1,
             grid_conf = [lidar_range, det_voxel_size],
             new_grid_conf = [motion_range, motion_voxel_size],
             using_spatial_prob=True,

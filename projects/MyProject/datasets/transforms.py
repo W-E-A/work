@@ -373,6 +373,7 @@ class GatherV2XPoseInfo(BaseTransform):
         example_seq = input_dict['example_seq']
         present_idx = input_dict['present_idx']
         future_seq = range(seq_length)[present_idx:] # only future motion
+        history_seq = range(seq_length)[:present_idx+1] # only history motion
 
         seq_pose_matrix = []
         seq_loc_matrix = []
@@ -395,16 +396,23 @@ class GatherV2XPoseInfo(BaseTransform):
 
         future_motion_matrix = []
         future_motion_rela_matrix = []
+        history_motion_rela_matrix = []
         for j in range(co_length):
             future_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['lidar2ego']) @ np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in future_seq]
+            history_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['lidar2ego']) @ np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in history_seq]
+            temp = list(map(calc_relative_pose, history_motion_list[:-1], history_motion_list[1:]))
+            temp.append(np.eye(4, dtype=np.float32))
+            history_motion_rela_matrix.append(np.stack(temp, axis=0))
             temp = [np.eye(4, dtype=np.float32)]
             temp.extend(list(map(calc_relative_pose, future_motion_list[1:], future_motion_list[:-1])))
             future_motion_rela_matrix.append(np.stack(temp, axis=0))
             future_motion_matrix.append(np.stack(calc_relative_pose(future_motion_list[0], future_motion_list), axis=0)) # type: ignore
         future_motion_matrix = np.stack(future_motion_matrix, axis=0) # NOTE starts with identity
         future_motion_rela_matrix = np.stack(future_motion_rela_matrix, axis=0) # NOTE starts with identity
+        history_motion_rela_matrix = np.stack(history_motion_rela_matrix, axis=0) # NOTE ends with identity
         input_dict['future_motion_matrix'] = future_motion_matrix # co seq 4 4 
         input_dict['future_motion_rela_matrix'] = future_motion_rela_matrix # co seq 4 4 
+        input_dict['history_motion_rela_matrix'] = history_motion_rela_matrix # co seq 4 4 
         return input_dict
 
 
@@ -935,7 +943,7 @@ class PackSceneInfo(BaseTransform):
                  meta_keys: tuple = (
                     'scene_name', 'seq_length', 'present_idx', 'co_agents', 'co_length', 'scene_length',
                     'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'future_motion_matrix',
-                    'loc_matrix', 'future_motion_rela_matrix'
+                    'loc_matrix', 'future_motion_rela_matrix', 'history_motion_rela_matrix'
                     ),
                 delete_ori_key: bool = True,
                 

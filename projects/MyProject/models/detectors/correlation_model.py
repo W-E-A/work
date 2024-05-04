@@ -4,6 +4,7 @@ from mmdet3d.models import MVXTwoStageDetector
 from mmengine.device import get_device
 import torch
 from torch import Tensor
+import numpy as np
 from mmengine.logging import print_log
 import logging
 def log(msg = "" ,level: int = logging.INFO):
@@ -50,6 +51,7 @@ class CorrelationModel(MVXTwoStageDetector):
             self.multi_task_head = MODELS.build(multi_task_head)
 
         if temporal_neck:
+            self.temporal_neck_cfg = temporal_neck
             self.temporal_neck = MODELS.build(temporal_neck)
         
         if self.pts_train_cfg:
@@ -85,7 +87,7 @@ class CorrelationModel(MVXTwoStageDetector):
                                                 voxel_dict['num_points'], # [n*bs, ] realpoints
                                                 voxel_dict['coors'], # [n*bs, 1 + 3] batch z y x
                                                 img_feats,
-                                                batch_input_metas) # FIXME 400MiB
+                                                batch_input_metas=batch_input_metas) # FIXME 400MiB
         if return_voxel_features:
             return_dict['voxel_features'] = voxel_features
         if extract_level == 1:
@@ -126,7 +128,7 @@ class CorrelationModel(MVXTwoStageDetector):
 
     def extract_feat(self,
                      batch_inputs_dict: dict,
-                     batch_input_metas: List[dict],
+                     batch_input_metas: Optional[List[dict]] = None,
                      **kwargs) -> Union[tuple, dict]:
         voxel_dict = batch_inputs_dict.get('voxels', None)
         # imgs = batch_inputs_dict.get('imgs', None)
@@ -172,6 +174,7 @@ class CorrelationModel(MVXTwoStageDetector):
         # scene_info_0.pop('future_motion_matrix')
         # scene_info_0.pop('loc_matrix')
         # scene_info_0.pop('future_motion_rela_matrix')
+        # scene_info_0.pop('history_motion_rela_matrix')
         # log(scene_info_0)
         # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
         
@@ -197,29 +200,38 @@ class CorrelationModel(MVXTwoStageDetector):
         # else:
         #     return []
         ################################ INPUT DEBUG (stop here) ################################
-
-        # infrastructure的所有输入
-        input_dict = present_seq[self.infrastructure_id]['inputs'] # voxel batch
-        input_samples = present_seq[self.infrastructure_id]['data_samples'] # batch
-        infrastructure_metas = [sample.metainfo for sample in input_samples] # batch
-
-        pts_feat_dict = self.extract_feat(
-            input_dict,
-            infrastructure_metas,
-            extract_level = 4,
-            return_voxel_features = False,
-            return_middle_features = False,
-            return_backbone_features = False,
-            return_neck_features = True) # FIXME 4 times
-        
-        infrastructure_features = pts_feat_dict['neck_features'] # B C H W
-        # infrastructure_features B, C, H, W（b, 384, 256, 256 single frame）
-
-        infrastructure_instances = []
-        for samples in input_samples:
+        import pdb;pdb.set_trace() # FIXME 2.2k MiB
+        infrastructure_seq_middle_features = [] # seq batch c h w
+        infrastructure_metas = [sample.metainfo for sample in example_seq[present_idx][self.infrastructure_id]['data_samples']] # batch
+        infrastructure_instances = [] # batch
+        for samples in example_seq[present_idx][self.infrastructure_id]['data_samples']:
             valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
             infrastructure_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
 
+        for i in range(present_idx+1):
+            input_dict = example_seq[i][self.infrastructure_id]['inputs']
+            pts_feat_dict = self.extract_feat(
+                            input_dict,
+                            extract_level = 2,
+                            return_voxel_features = False,
+                            return_middle_features = True,
+                            return_backbone_features = False,
+                            return_neck_features = False)
+            infrastructure_seq_middle_features.append(pts_feat_dict['middle_features'])
+        import pdb;pdb.set_trace() # FIXME 5.2k MiB
+        infrastructure_seq_middle_features = torch.cat(infrastructure_seq_middle_features, dim=0) # seq*batch c h w
+        infrastructure_seq_neck_features = self.pts_neck(self.pts_backbone(infrastructure_seq_middle_features))[0] # seq*batch c h w
+        _, c, h, w = infrastructure_seq_neck_features.shape
+        infrastructure_seq_neck_features = infrastructure_seq_neck_features.view(present_idx+1, -1, c, h, w).permute(1, 0, 2, 3, 4).contiguous() # batch seq c h w
+        import pdb;pdb.set_trace() # FIXME 12.2k MiB
+        if self.temporal_neck:
+            if self.temporal_neck_cfg['type'] == 'Temporal3DConvModel':
+                infrastructure_history_egomotion = np.stack([info.history_motion_rela_matrix[self.infrastructure_id] for info in scene_info], axis=0) # b s 4 4
+                # infrastructure_seq_neck_features = self.temporal_neck(infrastructure_seq_neck_features, history_egomotion=infrastructure_history_egomotion) # batch c h w
+                infrastructure_seq_neck_features = self.temporal_neck(infrastructure_seq_neck_features) # FIXME 除了infra之外是否需要输入egomotion信息和使用warp操作？
+            else:
+                infrastructure_seq_neck_features = self.temporal_neck(infrastructure_seq_neck_features) # batch c h w
+        import pdb;pdb.set_trace() # FIXME 20.5k MiB
         if mode == 'loss':
             infrastructure_label = present_seq[self.infrastructure_id]['motion_label'] # motion_label also for ego single
             ego_motion_labels = [present_seq[ego_id]['ego_motion_label'] for ego_id in ego_ids]
@@ -233,6 +245,7 @@ class CorrelationModel(MVXTwoStageDetector):
             # scene_info_0.pop('future_motion_matrix')
             # scene_info_0.pop('loc_matrix')
             # scene_info_0.pop('future_motion_rela_matrix')
+            # scene_info_0.pop('history_motion_rela_matrix')
             # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
             
@@ -256,14 +269,14 @@ class CorrelationModel(MVXTwoStageDetector):
             corr_forward_kwargs = {
                 'ego_motion_inputs':ego_motion_inputs
             }
-
+            import pdb;pdb.set_trace()
             infrastructure_feat_dict = self.multi_task_head(
-                infrastructure_features,
+                infrastructure_seq_neck_features,
                 det_forward_kwargs=det_forward_kwargs,
                 motion_forward_kwargs=motion_forward_kwargs,
                 corr_forward_kwargs=corr_forward_kwargs,
             ) # return multi_task_multi_feat, feat_dict, feat_list # FIXME 2.4 times GPU MEM
-
+            import pdb;pdb.set_trace()
             heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(infrastructure_instances)
             det_loss_kwargs = {
                 'heatmaps':heatmaps,# necessary
@@ -283,6 +296,7 @@ class CorrelationModel(MVXTwoStageDetector):
             # scene_info_0.pop('future_motion_matrix')
             # scene_info_0.pop('loc_matrix')
             # scene_info_0.pop('future_motion_rela_matrix')
+            # scene_info_0.pop('history_motion_rela_matrix')
             # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
 
@@ -304,13 +318,14 @@ class CorrelationModel(MVXTwoStageDetector):
                 'loss_names':ego_names, # optional
                 'gt_thres':0 # optional
             }
-
+            import pdb;pdb.set_trace()
             loss_dict = self.multi_task_head.loss(
                 infrastructure_feat_dict,
                 det_loss_kwargs=det_loss_kwargs,
                 motion_loss_kwargs=motion_loss_kwargs,
                 corr_loss_kwargs=corr_loss_kwargs,
             )
+            import pdb;pdb.set_trace()
 
             return loss_dict
         else:
@@ -322,6 +337,7 @@ class CorrelationModel(MVXTwoStageDetector):
             # scene_info_0.pop('future_motion_matrix')
             # scene_info_0.pop('loc_matrix')
             # scene_info_0.pop('future_motion_rela_matrix')
+            # scene_info_0.pop('history_motion_rela_matrix')
             # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
             

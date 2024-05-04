@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List, Union, Optional, Sequence, Tuple, Dict
-from mmdet3d.registry import MODELS
-from mmengine.structures import InstanceData
 import torch
 from torch import Tensor, nn
+import numpy as np
 import copy
 from mmcv.cnn import ConvModule
 from mmdet.models.utils import multi_apply
@@ -13,7 +12,6 @@ from mmdet3d.models.utils import clip_sigmoid, draw_heatmap_gaussian, gaussian_r
 from mmdet3d.registry import MODELS, TASK_UTILS
 from mmdet3d.structures import Det3DDataSample, xywhr2xyxyr
 from mmdet3d.models.dense_heads.centerpoint_head import circle_nms, nms_bev
-import numpy as np
 from ...utils import FeatureWarper
 
 

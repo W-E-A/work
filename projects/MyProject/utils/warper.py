@@ -54,7 +54,7 @@ class FeatureWarper(object):
 
         return warped_x
     
-    def cumulative_warp_features(self, x, flow, mode='nearest'):
+    def cumulative_warp_features(self, x, flow, mode='nearest', bev_transform=None):
         """ Warps a sequence of feature maps by accumulating incremental 2d flow.
         T_{01} T_{12} T_{23} T_{34} ...T_{n-1n} I
                                         -2   -1
@@ -82,10 +82,18 @@ class FeatureWarper(object):
         out = [x[:, -1]]
         cum_flow = flow[:, -2]
         for t in reversed(range(sequence_length - 1)):
+
+            # cum_flow only represents the ego_motion, while bev_transform needs extra processing
+            if bev_transform is not None:
+                # points 先做 inverse_bev_transform，再做 motion 变换，再做 bev_transform
+                warp_flow = bev_transform @ cum_flow @ bev_transform.inverse()
+            else:
+                warp_flow = cum_flow.clone()
+
             out.append(
                 self.warp_features(
                     x[:, t],
-                    cum_flow,
+                    warp_flow,
                     mode=mode)
                 )
             # @ is the equivalent of torch.bmm

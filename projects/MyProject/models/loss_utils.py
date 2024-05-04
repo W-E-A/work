@@ -1,4 +1,3 @@
-from matplotlib.pyplot import autoscale
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,14 +5,13 @@ from mmdet3d.registry import MODELS
 from mmdet3d.models.utils import clip_sigmoid
 
 
-class BinarySegmentationLoss(torch.nn.Module):
-    def __init__(self, pos_weight):
+class BinarySegmentationLoss(nn.Module):
+    def __init__(self):
         super(BinarySegmentationLoss, self).__init__()
-        self.loss_fn = torch.nn.BCELoss()
+        self.loss_fn = nn.BCELoss()
 
     def forward(self, ypred, ytgt):
         loss = self.loss_fn(ypred, ytgt)
-
         return loss
 
 
