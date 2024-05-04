@@ -216,7 +216,7 @@ class CorrelationModel(MVXTwoStageDetector):
         for samples in input_samples:
             valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
             infrastructure_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
-
+        
         if mode == 'loss':
             infrastructure_label = present_seq[self.infrastructure_id]['motion_label'] # motion_label also for ego single
             ego_motion_labels = [present_seq[ego_id]['ego_motion_label'] for ego_id in ego_ids]
@@ -314,12 +314,6 @@ class CorrelationModel(MVXTwoStageDetector):
             ego_motion_labels = [present_seq[ego_id]['ego_motion_label'] for ego_id in ego_ids]
             ego_motion_labels, ego_motion_inputs = self.multi_task_head.corr_head.prepare_ego_labels(ego_motion_labels)
             ################################ SHOW MOTION LABEL ################################
-            # assert batch_size == 1
-            # scene_info_0.pop('pose_matrix')
-            # scene_info_0.pop('future_motion_matrix')
-            # scene_info_0.pop('loc_matrix')
-            # scene_info_0.pop('future_motion_rela_matrix')
-            # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
             
             # for id, label in zip(ego_ids, ego_motion_labels):
@@ -355,7 +349,6 @@ class CorrelationModel(MVXTwoStageDetector):
             motion_pred_kwargs = {
             }
             corr_pred_kwargs = {
-                'ego_motion_inputs':ego_motion_inputs
             }
 
             predict_dict = self.multi_task_head.predict(
@@ -377,16 +370,16 @@ class CorrelationModel(MVXTwoStageDetector):
                             scene_sample_idx = scene_info[b].sample_idx,
                             scene_name = scene_info[b].scene_name,
                             agent_name = self.infrastructure_name, # FIXME
-                            sample_idx = meat_list[self.infrastructure_id][b]['sample_idx'], # type: ignore
-                            box_type_3d = meat_list[self.infrastructure_id][b]['box_type_3d'], # type: ignore
-                            lidar_path = meat_list[self.infrastructure_id][b]['lidar_path'], # type: ignore
+                            sample_idx = infrastructure_metas[b]['sample_idx'], # type: ignore
+                            box_type_3d = infrastructure_metas[b]['box_type_3d'], # type: ignore
+                            lidar_path = infrastructure_metas[b]['lidar_path'], # type: ignore
                         )
                     )
-                    sample.gt_instances_3d = ins_list[self.infrastructure_id][b] # type: ignore
+                    sample.gt_instances_3d = infrastructure_instances[b] # type: ignore
                     sample.gt_instances_3d.pop('track_id') # no need array
                     sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
                     # sample.gt_instances_3d.pop('coop_isvalid') # no need array
-                    sample.gt_instances_3d.pop('correlation') # no need array
+                    sample.gt_instances_3d.pop('correlations') # no need array
                     sample.pred_instances_3d = pred_result[b]
                     det_ret_list.append(sample)
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
@@ -429,7 +422,6 @@ class CorrelationModel(MVXTwoStageDetector):
             
             if 'corr_pred' in predict_dict:
                 corr_heatmaps = predict_dict['corr_pred']
-
                 ################################ SHOW CORRELATION HEATMAP ################################
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, name in enumerate(ego_names):
@@ -446,6 +438,25 @@ class CorrelationModel(MVXTwoStageDetector):
                 #     return []
                 ################################ SHOW CORRELATION HEATMAP ################################
                 return_dict['corr'] = corr_heatmaps
+
+                corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                corr_heatmaps_label = self.multi_task_head.corr_head.prepare_corr_heatmaps(corr_heatmaps) # c-1, B, 1, h, w
+                ################################ SHOW CORRELATION HEATMAP ################################
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+
+                # for idx, name in enumerate(ego_names):
+                #     maps = corr_heatmaps_label[idx][0]
+                #     visualizer.draw_featmap(maps)
+                #     visualizer.just_save(f'./data/vis/correlation_heatmap/{sample_idx}/{name}_correlation_heatmap_gt.png')
+                #     visualizer.clean()
+
+                # import pdb
+                # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                ################################ SHOW CORRELATION HEATMAP ################################
                 
             # return return_dict
             return [] # FIXME

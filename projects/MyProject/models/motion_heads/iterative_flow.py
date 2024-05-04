@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from mmdet3d.registry import MODELS
 from ._base_motion_head import BaseMotionHead
 from ..modules.motion_modules import ResFuturePrediction, ResFuturePredictionV2
+from ...utils import predict_instance_segmentation_and_trajectories
 
 
 @MODELS.register_module()
@@ -116,6 +117,24 @@ class IterativeFlow(BaseMotionHead):
                 b, _, h, w = bevfeats.shape
                 for task_key, task_head in self.task_heads.items():
                     res[task_key] = task_head(bevfeats).view(b, 1, -1, h, w)
-
-        # import pdb;pdb.set_trace()
         return res
+
+
+    def predict_by_feat(self, predictions: list):
+        # ['segmentation', 'instance_flow', 'instance_center', 'instance_offset'] 2 2 1 2
+        # output future seg and ins-seg, not traj
+        ret_list = []
+        for pred in predictions:
+            seg_prediction = torch.argmax(
+                pred['segmentation'], dim=2, keepdims=True) # B, len, 1, H, W
+
+            if self.using_focal_loss:
+                pred['instance_center'] = torch.sigmoid(
+                    pred['instance_center']) # B, len, 1, H, W
+
+            pred_consistent_instance_seg = predict_instance_segmentation_and_trajectories(
+                pred, compute_matched_centers=False,
+            )
+            ret_list.append((seg_prediction, pred_consistent_instance_seg))
+
+        return ret_list
