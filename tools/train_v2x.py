@@ -15,6 +15,14 @@ def parse_args():
                         type=str,
                         default=None,
                         help='the dir to save logs and models')
+    parser.add_argument('--batch-size',
+                        type=int,
+                        default=1,
+                        help='')
+    parser.add_argument('--num-workers',
+                        type=int,
+                        default=32,
+                        help='')
     parser.add_argument('--checkpoint',
                         type=str,
                         default=None,
@@ -65,6 +73,9 @@ def main():
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+
+    cfg.train_dataloader['batch_size'] = args.batch_size
+    cfg.train_dataloader['num_workers'] = args.num_workers
 
     cfg.launcher = args.launcher
     

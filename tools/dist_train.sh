@@ -12,8 +12,8 @@ echo "MASTER_ADDR: ${MASTER_ADDR}"
 echo "MASTER_PORT: ${MASTER_PORT}"
 echo "GPUS: ${GPUS}"
 
-PYTHONPATH="$(dirname $0)/../..":$PYTHONPATH \
+PYTHONPATH="$(dirname $0)/..":$PYTHONPATH \
 python -m torch.distributed.launch --nnodes=${WORLD_SIZE} \
     --node_rank=$RANK --nproc_per_node=$GPUS \
     --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
-    $(dirname "$0")/train_v2x.py $CONFIG --launcher pytorch ${@:4} #--deterministic
+    $(dirname "$0")/train_v2x.py $CONFIG --launcher pytorch ${@:4}
