@@ -33,4 +33,8 @@ class DeepAccidentDataPreprocessor(Det3DDataPreprocessor):
                         casted_example_seq[i][j]['inf_motion_label'] = self.cast_data(input_dict['inf_motion_label'])
                     if 'corr_heatmaps' in input_dict.keys(): # if corr
                         casted_example_seq[i][j]['corr_heatmaps'] = self.cast_data(input_dict['corr_heatmaps'])
+                        assert 'corr_gt_masks' in input_dict.keys()
+                        casted_example_seq[i][j]['corr_gt_masks'] = self.cast_data(input_dict['corr_gt_masks'])
+                        assert 'corr_dilate_heatmaps' in input_dict.keys()
+                        casted_example_seq[i][j]['corr_dilate_heatmaps'] = self.cast_data(input_dict['corr_dilate_heatmaps'])
         return {'scene_info': casted_scene_info, 'example_seq': casted_example_seq}

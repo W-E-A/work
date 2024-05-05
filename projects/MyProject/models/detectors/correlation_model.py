@@ -50,7 +50,7 @@ class CorrelationModel(MVXTwoStageDetector):
             self.multi_task_head = MODELS.build(multi_task_head)
         
         if self.pts_train_cfg:
-            pass
+            self.task_weight = self.co_cfg.get('task_weight', dict(det=1.0, motion=1.0, corr=1.0))
 
         if self.pts_test_cfg:
             pass
@@ -158,11 +158,15 @@ class CorrelationModel(MVXTwoStageDetector):
         co_agents = scene_info_0.co_agents
         co_length = scene_info_0.co_length
         sample_idx = scene_info_0.sample_idx
+        scene_name = scene_info_0.scene_name
+        seq_timestamps_0 = scene_info_0.seq_timestamps[0]
+        save_dir = f'{scene_name}_{seq_timestamps_0}'
         ego_ids = list(range(co_length))
         self.infrastructure_id = co_agents.index(self.infrastructure_name)
         ego_ids.remove(self.infrastructure_id)
         ego_names = [co_agents[id] for id in ego_ids]
         present_seq = example_seq[present_idx]
+
         ################################ INPUT DEBUG (stop here) ################################
         # assert batch_size == 1
         # scene_info_0.pop('pose_matrix')
@@ -170,11 +174,22 @@ class CorrelationModel(MVXTwoStageDetector):
         # scene_info_0.pop('loc_matrix')
         # scene_info_0.pop('future_motion_rela_matrix')
         # log(scene_info_0)
+
+        # import pdb
+        # pdb.set_trace()
+
+        # if mode == 'loss': 
+        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        # else:
+        #     return []
+        ################################ INPUT DEBUG (stop here) ################################
+
+        ################################ SHOW LIDAR POINTCLOUD BEV ################################
         # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
         
         # if 'points' in present_seq[self.infrastructure_id]['inputs'].keys():
         #     visualizer.set_points(present_seq[self.infrastructure_id]['inputs']['points'][0].cpu().numpy())
-        #     visualizer.just_save(f'./data/vis/lidar_bev/{sample_idx}/{self.infrastructure_name}_lidar_bev.png')
+        #     visualizer.just_save(f'./data/vis/lidar_bev/{save_dir}/{self.infrastructure_name}_lidar_bev.png')
         #     visualizer.clean()
         # else:
         #     log("no points to visualize, please check the config file.", logging.WARN)
@@ -182,18 +197,19 @@ class CorrelationModel(MVXTwoStageDetector):
         # for id, name in zip(ego_ids, ego_names):
         #     if 'points' in present_seq[id]['inputs'].keys():
         #         visualizer.set_points(present_seq[id]['inputs']['points'][0].cpu().numpy())
-        #         visualizer.just_save(f'./data/vis/lidar_bev/{sample_idx}/{name}_lidar_bev.png')
+        #         visualizer.just_save(f'./data/vis/lidar_bev/{save_dir}/{name}_lidar_bev.png')
         #         visualizer.clean()
         #     else:
         #         log("no points to visualize, please check the config file.", logging.WARN)
         
         # import pdb
         # pdb.set_trace()
+
         # if mode == 'loss': 
         #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
         # else:
         #     return []
-        ################################ INPUT DEBUG (stop here) ################################
+        ################################ SHOW LIDAR POINTCLOUD BEV ################################
 
         # infrastructure的所有输入
         input_dict = present_seq[self.infrastructure_id]['inputs'] # voxel batch
@@ -225,17 +241,11 @@ class CorrelationModel(MVXTwoStageDetector):
             ego_motion_labels, ego_motion_inputs = self.multi_task_head.corr_head.prepare_ego_labels(ego_motion_labels)
 
             ################################ SHOW MOTION LABEL ################################
-            # assert batch_size == 1
-            # scene_info_0.pop('pose_matrix')
-            # scene_info_0.pop('future_motion_matrix')
-            # scene_info_0.pop('loc_matrix')
-            # scene_info_0.pop('future_motion_rela_matrix')
-            # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
             
-            # visualizer.draw_motion_label(infrastructure_label, f'./data/vis/motion_label/{sample_idx}', 2, display_order='horizon', gif=True, prefix='infrastructure')
+            # visualizer.draw_motion_label(infrastructure_label, f'./data/vis/motion_label/{save_dir}', 2, display_order='horizon', gif=True, prefix='infrastructure')
             # for id, label in zip(ego_ids, ego_motion_labels):
-            #     visualizer.draw_motion_label(label, f'./data/vis/motion_label/{sample_idx}', 2, display_order='horizon', gif=True, prefix=f'{co_agents[id]}_motion')
+            #     visualizer.draw_motion_label(label, f'./data/vis/motion_label/{save_dir}', 2, display_order='horizon', gif=True, prefix=f'{co_agents[id]}_motion')
 
             # import pdb
             # pdb.set_trace()
@@ -273,21 +283,46 @@ class CorrelationModel(MVXTwoStageDetector):
             }
             # corr_heatmaps = self.multi_task_head.corr_head.get_corr_heatmaps(infrastructure_instances)
             corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
-            corr_heatmaps_label = self.multi_task_head.corr_head.prepare_corr_heatmaps(corr_heatmaps) # c-1, B, 1, h, w
+            corr_gt_masks = present_seq[self.infrastructure_id]['corr_gt_masks']
+            corr_dilate_heatmaps = present_seq[self.infrastructure_id]['corr_dilate_heatmaps']
+            corr_heatmaps_label, corr_gt_masks, corr_dilate_heatmaps = self.multi_task_head.corr_head.prepare_corr_heatmaps(
+                corr_heatmaps,
+                gt_masks = corr_gt_masks,
+                corr_dilate_heatmaps = corr_dilate_heatmaps
+            ) # c-1, B, 1, h, w
             ################################ SHOW CORRELATION HEATMAP ################################
-            # assert batch_size == 1
-            # scene_info_0.pop('pose_matrix')
-            # scene_info_0.pop('future_motion_matrix')
-            # scene_info_0.pop('loc_matrix')
-            # scene_info_0.pop('future_motion_rela_matrix')
-            # log(scene_info_0)
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
 
             # for idx, name in enumerate(ego_names):
             #     maps = corr_heatmaps_label[idx][0]
             #     visualizer.draw_featmap(maps)
-            #     visualizer.just_save(f'./data/vis/correlation_heatmap/{sample_idx}/{name}_correlation_heatmap_gt.png')
+            #     visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt.png')
             #     visualizer.clean()
+            #     if name == 'ego_vehicle':
+            #         a = corr_gt_masks[idx][0]
+            #         b = corr_dilate_heatmaps[idx][0]
+
+            #         visualizer.draw_featmap(a.float())
+            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_a.png')
+            #         visualizer.clean()
+            #         visualizer.draw_featmap((b > 0).float())
+            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_b.png')
+            #         visualizer.clean()
+            #         visualizer.draw_featmap((b > 0).float())
+            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_b.png')
+            #         visualizer.clean()
+
+            #         focal_neg_gt = torch.ones_like(maps, dtype=maps.dtype, device=maps.device)
+            #         dilate_pos = b > 0
+            #         dilate_pos[a] = False
+            #         focal_neg_gt[dilate_pos] = b[dilate_pos]
+            #         focal_neg_gt[a] = maps[a]
+            #         visualizer.draw_featmap(focal_neg_gt)
+            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_focal_neg_gt.png')
+            #         visualizer.clean()
+            #         visualizer.draw_featmap(focal_neg_gt - maps)
+            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_focal_neg_gt_neg_weights.png')
+            #         visualizer.clean()
 
             # import pdb
             # pdb.set_trace()
@@ -297,7 +332,9 @@ class CorrelationModel(MVXTwoStageDetector):
             #     return []
             ################################ SHOW CORRELATION HEATMAP ################################
             corr_loss_kwargs = {
-                'heatmaps':corr_heatmaps_label,# necessary
+                'heatmaps':corr_heatmaps_label, # necessary
+                'gt_masks':corr_gt_masks, # necessary
+                'dilate_heatmaps':corr_dilate_heatmaps, # necessary
                 'loss_names':ego_names, # optional
                 'gt_thres':0 # optional
             }
@@ -309,6 +346,15 @@ class CorrelationModel(MVXTwoStageDetector):
                 corr_loss_kwargs=corr_loss_kwargs,
             )
 
+            # 临时写法 FIXME
+            for k, v in loss_dict.items():
+                if 'motion' in k and 'motion' in self.task_weight:
+                    loss_dict[k] *= self.task_weight['motion']
+                elif 'corr' in k and 'corr' in self.task_weight:
+                    loss_dict[k] *= self.task_weight['corr']
+                else:
+                    loss_dict[k] *= self.task_weight['det']
+
             return loss_dict
         else:
             ego_motion_labels = [present_seq[ego_id]['ego_motion_label'] for ego_id in ego_ids]
@@ -317,7 +363,7 @@ class CorrelationModel(MVXTwoStageDetector):
             # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
             
             # for id, label in zip(ego_ids, ego_motion_labels):
-            #     visualizer.draw_motion_label(label, f'./data/vis/motion_label/{sample_idx}', 2, display_order='horizon', gif=True, prefix=f'{co_agents[id]}_motion')
+            #     visualizer.draw_motion_label(label, f'./data/vis/motion_label/{save_dir}', 2, display_order='horizon', gif=True, prefix=f'{co_agents[id]}_motion')
 
             # import pdb
             # pdb.set_trace()
@@ -409,7 +455,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 #     # fake visualization
                 #     motion_feat = single_head_feat_dict['motion_feat']
                 #     visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
-                #     visualizer.draw_motion_output(motion_feat, f'./data/vis/motion_output/{sample_idx}', 2, display_order='horizon', gif=True)
+                #     visualizer.draw_motion_output(motion_feat, f'./data/vis/motion_output/{save_dir}', 2, display_order='horizon', gif=True)
 
                 # import pdb
                 # pdb.set_trace()
@@ -427,7 +473,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 # for idx, name in enumerate(ego_names):
                 #     maps = corr_heatmaps[idx][0]
                 #     visualizer.draw_featmap(maps)
-                #     visualizer.just_save(f'./data/vis/correlation_heatmap/{sample_idx}/{name}_correlation_heatmap_pred.png')
+                #     visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_pred.png')
                 #     visualizer.clean()
 
                 # import pdb
@@ -447,7 +493,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 # for idx, name in enumerate(ego_names):
                 #     maps = corr_heatmaps_label[idx][0]
                 #     visualizer.draw_featmap(maps)
-                #     visualizer.just_save(f'./data/vis/correlation_heatmap/{sample_idx}/{name}_correlation_heatmap_gt.png')
+                #     visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt.png')
                 #     visualizer.clean()
 
                 # import pdb

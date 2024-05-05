@@ -4,23 +4,23 @@ custom_imports = dict(
 )
 
 # full with multi sweeps
-# train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
+train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
+val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
 
 # full no sweeps
-# train_annfile_path = 'data/deepaccident/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident/deepaccident_infos_val.pkl'
+# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
+# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
 
 # debug with multi sweeps
-train_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-val_annfile_path = 'data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
 
 # debug no sweeps
-# train_annfile_path = 'data/deepaccident_debug/deepaccident_infos_train.pkl'
-# val_annfile_path = 'data/deepaccident_debug/deepaccident_infos_val.pkl'
+# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
+# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
 
 use_multi_sweeps = True
-delete_pointcloud = True
+delete_pointcloud = True # CLOUD
 
 classes = [
     'car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian'
@@ -60,8 +60,8 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 1
-num_workers = 32
+batch_size = 4 # CLOUD
+num_workers = 32 # CLOUD
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
@@ -166,6 +166,8 @@ train_scene_pipline = [
     dict(type='GatherV2XPoseInfo'),
     dict(
         type = 'CorrelationFilter',
+        pc_range = lidar_range,
+        voxel_size = voxel_size,
         infrastructure_name = infrastructure_name,
         with_velocity = det_with_velocity,
         ego_id = -100,
@@ -174,14 +176,7 @@ train_scene_pipline = [
         alpha_coeff = 1,
         beta_coeff = 1,
         gamma_coeff = 2,
-        # visualizer_cfg = dict(
-        #     type='SimpleLocalVisualizer',
-        #     pc_range=lidar_range,
-        #     voxel_size=voxel_size,
-        #     name='visualizer',
-        # ),
-        # just_save_root = './data/vis/train_correlation_bev_gt',
-        # increment_save = True,
+        enable_visualize=False,
         verbose = False,
     ),
     dict(
@@ -229,6 +224,8 @@ test_scene_pipline = [
     dict(type='GatherV2XPoseInfo'),
     dict(
         type = 'CorrelationFilter',
+        pc_range = lidar_range,
+        voxel_size = voxel_size,
         infrastructure_name = infrastructure_name,
         with_velocity = det_with_velocity,
         ego_id = -100,
@@ -237,15 +234,21 @@ test_scene_pipline = [
         alpha_coeff = 1,
         beta_coeff = 1,
         gamma_coeff = 2,
-        # visualizer_cfg = dict(
-        #     type='SimpleLocalVisualizer',
-        #     pc_range=lidar_range,
-        #     voxel_size=voxel_size,
-        #     name='visualizer',
-        # ),
-        # just_save_root = './data/vis/test_correlation_bev_gt',
-        # increment_save = True,
+        enable_visualize=False,
         verbose = False,
+    ),
+    dict(
+        type = 'MakeMotionLabels',
+        pc_range = motion_range,
+        voxel_size = motion_voxel_size,
+        infrastructure_name = infrastructure_name,
+        mode = 'normal',
+        just_present = False,
+        ego_id = -100,
+        only_vehicle = motion_only_vehicle,
+        vehicle_id_list = vehicle_id_list,
+        filter_invalid = motion_filter_invalid,
+        ignore_index = 255,
     ),
     dict(
         type = 'MakeMotionLabels',
@@ -256,6 +259,15 @@ test_scene_pipline = [
         just_present = False,
         ego_id = -100,
         ignore_index = 255,
+    ),
+    dict(
+        type = 'MakeMotionLabels',
+        pc_range = lidar_range,
+        voxel_size = corr_voxel_size,
+        infrastructure_name = infrastructure_name,
+        mode = 'corr',
+        only_vehicle = corr_only_vehicle,
+        vehicle_id_list = vehicle_id_list,
     ),
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
@@ -273,7 +285,7 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=False),
+          shuffle=True), # CLOUD
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path,
@@ -470,7 +482,13 @@ model = dict(
             n_future_and_present=seq_length - present_idx, # future and present
             label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
             in_channels=sum([128, 128, 128]),
-            loss_corr=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
+            loss_cfg=dict(
+                type='CorrelationLoss',
+                gamma=2.0,
+                smooth_beta=0.5,
+                pos_weight=1.0,
+                neg_weight=1.0,
+            ),
             separate_head=dict(
                 type='SeparateHead',
                 head_conv=64,
@@ -494,7 +512,13 @@ model = dict(
         corr_dense_reg=1,
         corr_max_objs=500,
         corr_gaussian_overlap=0.5,
-        corr_min_radius=2
+        corr_min_radius=2,
+
+        task_weight=dict(
+            det=1.0,
+            motion=1.0,
+            corr=1.0
+        ),
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
@@ -537,8 +561,8 @@ default_hooks = dict(
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
 custom_hooks = [
-    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='./work_dirs/gpu_messages')
-]
+    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/gpu_messages')
+] # CLOUD
 
 env_cfg = dict(
     cudnn_benchmark=True,

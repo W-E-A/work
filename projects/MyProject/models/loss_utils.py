@@ -5,11 +5,51 @@ import torch.nn.functional as F
 from mmdet3d.registry import MODELS
 from mmdet3d.models.utils import clip_sigmoid
 
+@MODELS.register_module()
+class CorrelationLoss(nn.Module):
+    def __init__(self,
+        gamma: float = 2.0,
+        smooth_beta: float = 0.5,
+        pos_weight: float = 1.0,
+        neg_weight: float = 1.0,
+        ):
+        super(CorrelationLoss, self).__init__()
+        # self.loss_fn = F.smooth_l1_loss
+        self.loss_fn = F.l1_loss
 
-class BinarySegmentationLoss(torch.nn.Module):
-    def __init__(self, pos_weight):
+        self.gamma = gamma
+        self.smooth_beta = smooth_beta
+        assert self.smooth_beta <= 1 and self.smooth_beta > 0
+        self.pos_weight = pos_weight
+        self.neg_weight = neg_weight
+    
+    def forward(self, prediction, gt, gt_mask, dilate_gt):
+        eps = 1e-12
+        pos_weights = gt_mask.float()
+
+        focal_neg_gt = torch.ones_like(gt, dtype=gt.dtype, device=gt.device)
+        dilate_pos = dilate_gt > 0
+        dilate_pos[gt_mask] = False
+        focal_neg_gt[dilate_pos] = dilate_gt[dilate_pos]
+        focal_neg_gt[gt_mask] = gt[gt_mask]
+        
+        neg_weights = (focal_neg_gt - gt).pow(self.gamma)
+
+        # neg_weights = (1 - gt).pow(self.gamma) # ???
+
+        # raw_loss = self.loss_fn(prediction, gt, reduction='none', beta=self.smooth_beta)
+        raw_loss = self.loss_fn(prediction, gt, reduction='none')
+
+        weight_loss = self.pos_weight * pos_weights * raw_loss + self.neg_weight * neg_weights * raw_loss
+        num_pos = gt_mask.float().sum().item()
+        final_loss = weight_loss.sum()
+        return final_loss
+
+
+class BinarySegmentationLoss(nn.Module):
+    def __init__(self):
         super(BinarySegmentationLoss, self).__init__()
-        self.loss_fn = torch.nn.BCELoss()
+        self.loss_fn = nn.BCELoss()
 
     def forward(self, ypred, ytgt):
         loss = self.loss_fn(ypred, ytgt)

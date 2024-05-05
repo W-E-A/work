@@ -6,13 +6,13 @@
 
 ## TODO
 
-- [] 修改`FIXME`内容
+- [] 修改`FIXME`、`BUG`内容
 
 ## Structure
 
 **工程文件夹：`projects/MyProject`**
 
-**配置文件：`projects/MyProject/configs/exp1.py`**
+**配置文件位于：`projects/MyProject/configs`**
 
 `configs`是develop的原生配置，**将会在打包的时候放置在`mmdet3d/.mim`下以供`mim`来使用**
 
@@ -52,27 +52,15 @@ python setup.py install
 ## Command
 
 ```Bash
-# debug
-python tools/train_v2x.py projects/MyProject/configs/exp_new_1.py
-
-# train without checkpoint (DDP mode recommended)
-nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch &
-
-# train with checkpoint (DDP mode recommended)
-nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py projects/MyProject/configs/exp1.py --launcher pytorch --checkpoint /ai/volume/work/work_dirs/exp1/single_epoch_20.pth &
-
-# test a checkpoint (Please modify the config file first)
-python tools/test_v2x.py projects/MyProject/configs/exp1.py work_dirs/exp1/epoch_20.pth --work-dir work_dirs/uni_temppp
-
 #create data
 # deepaccident no sweeps
-python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident
+python tools/create_data.py deepaccident --root-path [PATH TO DATASET] --sample-interval 5 --out-dir ./data/deepaccident
 # deepaccident multi sweeps (max-sweeps must lt sample-interval)
-python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident_ms --max-sweeps 2
+python tools/create_data.py deepaccident --root-path [PATH TO DATASET] --sample-interval 5 --out-dir ./data/deepaccident_ms --max-sweeps 2
 # deepaccident 10 small amounts of data (no sweeps)
-python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident_debug --debug
+python tools/create_data.py deepaccident --root-path [PATH TO DATASET] --sample-interval 5 --out-dir ./data/deepaccident_debug --debug
 # deepaccident 10 small amounts of data (with sweeps)
-python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-interval 5 --out-dir ./data/deepaccident_ms_debug --max-sweeps 2 --debug
+python tools/create_data.py deepaccident --root-path [PATH TO DATASET] --sample-interval 5 --out-dir ./data/deepaccident_ms_debug --max-sweeps 2 --debug
 
 # deepaccident 文件结构：
 # .
@@ -96,8 +84,20 @@ python tools/create_data.py deepaccident --root-path /path/to/dataset --sample-i
 # └── type1_subtype2_normal
 #     ├── ......
 
+# base train (Please modify the config file first)
+python tools/train_v2x.py [CONFIG PATH]
+
+# train without checkpoint (DDP mode recommended) (Please modify the config file first)
+nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py [CONFIG PATH] --launcher pytorch &
+
+# train with checkpoint (DDP mode recommended) (Please modify the config file first)
+nohup python -m torch.distributed.launch --nproc_per_node=1 tools/train_v2x.py [CONFIG PATH] --launcher pytorch --checkpoint [CKPT PATH] &
+
+# test a checkpoint (Please modify the config file first)
+python tools/test_v2x.py [CONFIG PATH] [CKPT PATH] --work-dir [SAVE PATH]
+
 # analyze data
-python tools/analyze_data.py /path/to/config --mode check_raw_info_format --verbose
+python tools/analyze_data.py [CONFIG PATH] --mode check_raw_info_format --verbose
 
 # generate env info
 pipreqs --ignore ./thirdpart/ --savepath ./current_env.txt --use-local ./

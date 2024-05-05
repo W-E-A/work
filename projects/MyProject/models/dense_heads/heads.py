@@ -15,6 +15,7 @@ from mmdet3d.structures import Det3DDataSample, xywhr2xyxyr
 from mmdet3d.models.dense_heads.centerpoint_head import circle_nms, nms_bev
 import numpy as np
 from ...utils import FeatureWarper
+from ..loss_utils import CorrelationLoss
 
 
 @MODELS.register_module()
@@ -748,8 +749,13 @@ class CorrGenerateHead(BaseModule):
         n_future_and_present: int = 0,
         label_size: int = 6,
         in_channels: Union[List[int], int] = [128],
-        loss_corr: dict = dict(
-            type='mmdet.GaussianFocalLoss', reduction='mean'),
+        loss_cfg: Optional[dict] = dict(
+            type='CorrelationLoss',
+            gamma = 2.0,
+            smooth_beta = 0.5,
+            pos_weight = 1.0,
+            neg_weight = 1.0,
+        ),
         separate_head: dict = dict(
             type='mmdet.SeparateHead',
             init_bias=-2.19,
@@ -779,7 +785,7 @@ class CorrGenerateHead(BaseModule):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.in_channels = in_channels
-        self.loss_corr = MODELS.build(loss_corr)
+        self.heatmap_criterion = MODELS.build(loss_cfg)
 
         # a shared convolution
         self.shared_conv = ConvModule(
@@ -817,23 +823,38 @@ class CorrGenerateHead(BaseModule):
     def loss_by_feat(self,
                      preds_list,
                      heatmaps = None,
+                     gt_masks = None,
+                     dilate_heatmaps = None,
                      loss_names = None,
                      gt_thres: float = 0.3):
-        assert heatmaps is not None
+        assert heatmaps is not None and gt_masks is not None and dilate_heatmaps is not None
         loss_dict = {}
         names = list(range(len(preds_list)))
         if loss_names:
             names = loss_names
+
         # import pdb;pdb.set_trace()
-        for name, pred_result, heatmap in zip(names, preds_list, heatmaps):
-            pred_result = pred_result[0]
-            num_pos = heatmap.gt(gt_thres).float().sum().item() # 需要调整
-            pred_result['heatmap'] = clip_sigmoid(pred_result['heatmap'])
-            loss_heatmap = self.loss_corr(
-                pred_result['heatmap'], # B c H W
-                heatmap, # type: ignore  B c H W
-                avg_factor=max(num_pos, 1))
-            loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
+
+        # for name, pred_result, heatmap, gt_mask, dilate_heatmap in zip(names, preds_list, heatmaps, gt_masks, dilate_heatmaps):
+        #     pred_result = pred_result[0]
+        #     pred_heatmap = clip_sigmoid(pred_result['heatmap']) # b, 1, h, w
+        #     loss_heatmap = self.heatmap_criterion(
+        #         pred_heatmap, # b, 1, h, w
+        #         heatmap, # b, 1, h, w
+        #         gt_mask, # b, 1, h, w
+        #         dilate_heatmap, # b, 1, h, w
+        #     )
+        #     loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
+
+        pred_heatmap = torch.stack([clip_sigmoid(v[0]['heatmap']) for v in preds_list], dim=0)
+        loss_heatmap = self.heatmap_criterion(
+            pred_heatmap, # c-1, b, 1, h, w
+            heatmaps, # c-1, b, 1, h, w
+            gt_masks, # c-1, b, 1, h, w
+            dilate_heatmaps, # c-1, b, 1, h, w
+        )
+        loss_dict[f'loss_corr_heatmap'] = loss_heatmap
+
         return loss_dict
 
     def predict_by_feat(self, preds_dicts: Tuple[List[dict]]) -> List[Tensor]:
@@ -912,10 +933,13 @@ class CorrGenerateHead(BaseModule):
         return_list = tuple(map(list, zip(*return_list)))
         return return_list
 
-    def prepare_corr_heatmaps(self, input):
+    def prepare_corr_heatmaps(self, heatmaps, **kwargs):
         # intput list of c-1 h w tensor
-        input = torch.stack(input, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous() # c-1, B, 1, h, w
-        return input
+        heatmaps = torch.stack(heatmaps, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous() # c-1, B, 1, h, w
+        ret_list = [heatmaps]
+        for _, v in kwargs.items():
+            ret_list.append(torch.stack(v, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous()) # c-1, B, 1, h, w
+        return tuple(ret_list)
 
     def get_corr_heatmaps(
         self,
