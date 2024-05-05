@@ -411,6 +411,8 @@ class GatherV2XPoseInfo(BaseTransform):
 @TRANSFORMS.register_module()
 class CorrelationFilter(BaseTransform):
     def __init__(self,
+        pc_range,
+        voxel_size,
         infrastructure_name: str = 'infrastructure',
         with_velocity: bool = True,
         ego_id: int = -100,
@@ -419,6 +421,7 @@ class CorrelationFilter(BaseTransform):
         alpha_coeff: float = 1,
         beta_coeff: float = 1,
         gamma_coeff: float = 2,
+        enable_visualize: bool = False,
         visualizer_cfg: dict = None,
         just_save_root: str = None,
         increment_save: bool = True,
@@ -432,13 +435,19 @@ class CorrelationFilter(BaseTransform):
         self.alpha_coeff = alpha_coeff
         self.beta_coeff = beta_coeff
         self.gamma_coeff = gamma_coeff
-        self.visualizer = None
-        if visualizer_cfg is not None:
+        self.enable_visualize = enable_visualize
+        if self.enable_visualize:
+            visualizer_cfg = dict(
+                type='SimpleLocalVisualizer',
+                pc_range=pc_range,
+                voxel_size=voxel_size,
+                name='correlation_visualizer',
+            ) if not visualizer_cfg else visualizer_cfg
             self.visualizer: SimpleLocalVisualizer = VISUALIZERS.build(visualizer_cfg)
-            assert just_save_root != None
-            os.makedirs(just_save_root, exist_ok=True)
-        self.just_save_root = just_save_root
-        self.increment_save = increment_save
+            self.just_save_root = './data/vis/instance_correlation_gt' if not just_save_root else just_save_root
+            self.increment_save = increment_save
+        else:
+            self.visualizer = None
         self.verbose = verbose
         
         self.cmaps = [
@@ -666,10 +675,10 @@ class CorrelationFilter(BaseTransform):
                         log(agent)
                     if self.increment_save:
                         save_path = os.path.join(self.just_save_root, f"{agent}")
-                        self.visualizer.just_save(os.path.join(save_path, f"{sample_idx}.png"))
+                        self.visualizer.just_save(os.path.join(save_path, f"{scene_name}_{seq_timestamps[0]}.png"))
                     else:
                         save_path = os.path.join(self.just_save_root, f"{agent}")
-                        self.visualizer.just_save(os.path.join(save_path, f"{sample_idx}.png"))
+                        self.visualizer.just_save(os.path.join(save_path, f"{scene_name}.png"))
                     self.visualizer.clean()
         
         correlation_list = torch.stack(correlation_list, dim=1) # N, x
@@ -743,6 +752,8 @@ class MakeMotionLabels(BaseTransform):
 
         if self.mode == 'corr':
             corr_heatmaps = []
+            corr_gt_masks = []
+            corr_dilate_heatmaps = []
             gt_instances_3d = example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d.clone()
             assert 'correlations' in gt_instances_3d.keys()
             if self.only_vehicle:
@@ -756,23 +767,24 @@ class MakeMotionLabels(BaseTransform):
             for j in range(len(co_agents) - 1):
                 correlation = correlations[:, j]
                 corr_heatmap = np.zeros((self.grid_size[0], self.grid_size[1]))
-                mask = np.zeros((self.grid_size[0], self.grid_size[1]))
                 for index, id in enumerate(gt_instances_3d.track_id):
                     score = correlation[index].item()
                     poly_region = bbox_corners_voxel[index]
                     cv2.fillPoly(corr_heatmap, [poly_region], score)
-                    # cv2.line(mask, poly_region[0], poly_region[1], 1)
-                # mask = mask > 0
-                # zero_mask = corr_heatmap > 0
-                # new_heatmap = cv2.GaussianBlur(corr_heatmap[mask], (5, 5), 0)
-                # print(zero_mask.shape)
-                # print(new_heatmap.shape)
-                # print(corr_heatmap.shape)
-                # new_heatmap[zero_mask] = corr_heatmap[zero_mask]
-                corr_heatmap = cv2.GaussianBlur(corr_heatmap, (5, 5), 0)
+                kernel_size = 3
+                # 使用膨胀核对图像进行膨胀，保持原分数位置不变
+                corr_gt_mask = corr_heatmap > 0
+                corr_heatmap = cv2.dilate(corr_heatmap, np.ones((kernel_size, kernel_size), dtype=np.uint8))
+                corr_dilate_heatmaps.append(cv2.dilate(corr_heatmap, np.ones((kernel_size, kernel_size), dtype=np.uint8)))
+                corr_heatmap = cv2.GaussianBlur(corr_heatmap, (kernel_size, kernel_size), 0)
                 corr_heatmaps.append(corr_heatmap)
+                corr_gt_masks.append(corr_gt_mask)
             corr_heatmaps = torch.from_numpy(np.stack(corr_heatmaps, axis=0)).float() # c-1, H, W
+            corr_gt_masks = torch.from_numpy(np.stack(corr_gt_masks, axis=0)) # c-1, H, W
+            corr_dilate_heatmaps = torch.from_numpy(np.stack(corr_dilate_heatmaps, axis=0)).float() # c-1, H, W
             input_dict['example_seq'][present_idx][infrastructure_idx]['corr_heatmaps'] = corr_heatmaps
+            input_dict['example_seq'][present_idx][infrastructure_idx]['corr_gt_masks'] = corr_gt_masks
+            input_dict['example_seq'][present_idx][infrastructure_idx]['corr_dilate_heatmaps'] = corr_dilate_heatmaps
         else:
             for j, agent in enumerate(co_agents):
                 if self.mode == 'ego' and agent == self.infrastructure_name:
