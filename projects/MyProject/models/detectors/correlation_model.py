@@ -10,6 +10,7 @@ def log(msg = "" ,level: int = logging.INFO):
     print_log(msg, "current", level)
 from mmdet3d.structures import Det3DDataSample
 from ...visualization import SimpleLocalVisualizer
+import random
 
 
 @MODELS.register_module()
@@ -50,7 +51,7 @@ class CorrelationModel(MVXTwoStageDetector):
             self.multi_task_head = MODELS.build(multi_task_head)
         
         if self.pts_train_cfg:
-            self.task_weight = self.co_cfg.get('task_weight', dict(det=1.0, motion=1.0, corr=1.0))
+            self.task_weight = self.pts_train_cfg.get('task_weight', dict(det=1.0, motion=1.0, corr=1.0))
 
         if self.pts_test_cfg:
             pass
@@ -164,8 +165,12 @@ class CorrelationModel(MVXTwoStageDetector):
         ego_ids = list(range(co_length))
         self.infrastructure_id = co_agents.index(self.infrastructure_name)
         ego_ids.remove(self.infrastructure_id)
+        ego_ids = random.sample(ego_ids,2)
+        ego_ids.sort()
         ego_names = [co_agents[id] for id in ego_ids]
         present_seq = example_seq[present_idx]
+        
+        
 
         ################################ INPUT DEBUG (stop here) ################################
         # assert batch_size == 1
@@ -234,7 +239,7 @@ class CorrelationModel(MVXTwoStageDetector):
             infrastructure_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
         
         if mode == 'loss':
-            infrastructure_label = present_seq[self.infrastructure_id]['motion_label'] # motion_label also for ego single
+            infrastructure_label = present_seq[self.infrastructure_id]['inf_motion_label'] # motion_label also for ego single
             ego_motion_labels = [present_seq[ego_id]['ego_motion_label'] for ego_id in ego_ids]
 
             infrastructure_label, infrastructure_input = self.multi_task_head.motion_head.prepare_future_labels(infrastructure_label)
@@ -285,8 +290,15 @@ class CorrelationModel(MVXTwoStageDetector):
             corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
             corr_gt_masks = present_seq[self.infrastructure_id]['corr_gt_masks']
             corr_dilate_heatmaps = present_seq[self.infrastructure_id]['corr_dilate_heatmaps']
-            corr_heatmaps_label, corr_gt_masks, corr_dilate_heatmaps = self.multi_task_head.corr_head.prepare_corr_heatmaps(
+            corr_pos_nums = present_seq[self.infrastructure_id]['corr_pos_nums']
+            for idx in range(len(corr_heatmaps)):
+                corr_heatmaps[idx] = corr_heatmaps[idx][ego_ids,:,:]
+                corr_gt_masks[idx] = corr_gt_masks[idx][ego_ids,:,:]
+                corr_dilate_heatmaps[idx] = corr_dilate_heatmaps[idx][ego_ids,:,:]
+                corr_pos_nums[idx] = corr_pos_nums[idx][ego_ids]
+            corr_heatmaps_label, corr_pos_nums, corr_gt_masks, corr_dilate_heatmaps = self.multi_task_head.corr_head.prepare_corr_heatmaps(
                 corr_heatmaps,
+                corr_pos_nums,
                 gt_masks = corr_gt_masks,
                 corr_dilate_heatmaps = corr_dilate_heatmaps
             ) # c-1, B, 1, h, w
@@ -335,6 +347,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 'heatmaps':corr_heatmaps_label, # necessary
                 'gt_masks':corr_gt_masks, # necessary
                 'dilate_heatmaps':corr_dilate_heatmaps, # necessary
+                'corr_pos_nums':corr_pos_nums,
                 'loss_names':ego_names, # optional
                 'gt_thres':0 # optional
             }
@@ -433,10 +446,11 @@ class CorrelationModel(MVXTwoStageDetector):
                 # for idx, result in enumerate(det_ret_list):
                 #     visualizer.set_points_from_npz(result.lidar_path)
                 #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
-                #     thres = self.score_threshold
+                #     # thres = self.score_threshold
+                #     thres = 0.3
                 #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
                 #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
-                #     visualizer.just_save(f'./data/vis/det_result/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+                #     visualizer.just_save(f'./data/vis/det_result/single_result_{thres}_{self.infrastructure_name}_{result.sample_idx}_{result.scene_name}.png')
 
                 # import pdb
                 # pdb.set_trace()
@@ -472,6 +486,8 @@ class CorrelationModel(MVXTwoStageDetector):
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, name in enumerate(ego_names):
                 #     maps = corr_heatmaps[idx][0]
+                #     thres = 0.25
+                #     maps[maps<thres] = 0
                 #     visualizer.draw_featmap(maps)
                 #     visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_pred.png')
                 #     visualizer.clean()
@@ -486,7 +502,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 return_dict['corr'] = corr_heatmaps
 
                 corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
-                corr_heatmaps_label = self.multi_task_head.corr_head.prepare_corr_heatmaps(corr_heatmaps) # c-1, B, 1, h, w
+                corr_heatmaps_label, = self.multi_task_head.corr_head.prepare_corr_heatmaps(corr_heatmaps) # c-1, B, 1, h, w
                 ################################ SHOW CORRELATION HEATMAP ################################
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
 
@@ -505,4 +521,5 @@ class CorrelationModel(MVXTwoStageDetector):
                 ################################ SHOW CORRELATION HEATMAP ################################
                 
             # return return_dict
-            return [] # FIXME
+            return det_ret_list
+            # return [] # FIXME

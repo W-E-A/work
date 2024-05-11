@@ -37,4 +37,6 @@ class DeepAccidentDataPreprocessor(Det3DDataPreprocessor):
                         casted_example_seq[i][j]['corr_gt_masks'] = self.cast_data(input_dict['corr_gt_masks'])
                         assert 'corr_dilate_heatmaps' in input_dict.keys()
                         casted_example_seq[i][j]['corr_dilate_heatmaps'] = self.cast_data(input_dict['corr_dilate_heatmaps'])
+                        assert 'corr_pos_nums' in input_dict.keys()
+                        casted_example_seq[i][j]['corr_pos_nums'] = self.cast_data(input_dict['corr_pos_nums'])
         return {'scene_info': casted_scene_info, 'example_seq': casted_example_seq}

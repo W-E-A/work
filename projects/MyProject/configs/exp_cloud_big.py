@@ -60,24 +60,21 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 1 # CLOUD
+batch_size = 2 # CLOUD
 num_workers = 4 # CLOUD
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-# sample_agents = (
-#     'ego_vehicle', 'infrastructure',
-# )
-# sample_agents = (
-#     'ego_vehicle', 'other_vehicle', 'infrastructure',
-# )
+train_mode = 'fusion'
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
+ego_name = 'ego_vehicle'
 motion_only_vehicle = False
 motion_filter_invalid = False
 corr_only_vehicle = False
 corr_filter_invalid = False
 vehicle_id_list = [0, 1, 2] # agents 'car', 'van', 'truck'
+shared_weights = ['corr_model']
 
 train_pipline = [
     dict(
@@ -309,19 +306,10 @@ test_evaluator = dict(
     with_velocity=det_with_velocity,
 )
 
-model = dict(
+corr_model = dict(
     type='CorrelationModel',
-    data_preprocessor=dict(
-        type='DeepAccidentDataPreprocessor',
-        delete_pointcloud=delete_pointcloud,
-        voxel=True,
-        voxel_type = 'hard',
-        voxel_layer=dict(
-            point_cloud_range=lidar_range,
-            max_num_points=20,
-            voxel_size=voxel_size,
-            max_voxels=(30000, 40000)),
-    ), # train, test voxel/pillar size
+    init_cfg=dict(type='Pretrained', 
+    checkpoint='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/wyc/train/wyc-deep-0511/epoch_20.pth'),
     pts_voxel_encoder = dict(
         type = 'PillarFeatureNet',
         in_channels = 5 if use_multi_sweeps else 4,
@@ -362,29 +350,6 @@ model = dict(
         upsample_cfg=dict(type='deconv', bias=False),
         use_conv_for_no_stride=True
     ),
-    # pts_fusion_layer=dict(
-    #     type='V2XTransformerFusion',
-    #     in_channels=sum([128, 128, 128]),
-    #     n_head=3,
-    #     mid_channels=256,
-    #     dense_fusion=True,
-    # ),
-    # train_comm_expand_layer=dict(
-    #     type='GaussianConv',
-    #     kernel_size=train_comm_ksize,
-    #     sigma=1.0,
-    #     impl=True,
-    # ),
-    # test_comm_expand_layer=dict(
-    #     type='GaussianConv',
-    #     kernel_size=test_comm_ksize,
-    #     sigma=1.0,
-    #     impl=True,
-    # ),
-    # temporal_backbone=dict(
-    #     type='TemporalIdentity',
-    #     position='last'
-    # ),
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
@@ -469,6 +434,116 @@ model = dict(
             num_heatmap_convs=2,
         ),
     ),
+)
+
+model = dict(
+    type='EgoModel',
+    corr_model = corr_model,
+    freeze_inf_model = True,
+    data_preprocessor=dict(
+        type='DeepAccidentDataPreprocessor',
+        delete_pointcloud=delete_pointcloud,
+        voxel=True,
+        voxel_type = 'hard',
+        voxel_layer=dict(
+            point_cloud_range=lidar_range,
+            max_num_points=20,
+            voxel_size=voxel_size,
+            max_voxels=(30000, 40000)),
+    ), # train, test voxel/pillar size
+    pts_voxel_encoder = dict(
+        type = 'PillarFeatureNet',
+        in_channels = 5 if use_multi_sweeps else 4,
+        feat_channels = (64, ),
+        with_distance = False,
+        with_cluster_center = True,
+        with_voxel_center = True,
+        voxel_size = voxel_size,
+        point_cloud_range = tuple(lidar_range),
+        norm_cfg = dict(
+            type = 'BN1d',
+            eps = 1e-3,
+            momentum = 0.01),
+        mode = 'max',
+        legacy = False
+    ),
+    pts_middle_encoder=dict(
+        type = 'PointPillarsScatterWrapper',
+        in_channels = 64,
+        lidar_range = lidar_range,
+        voxel_size = voxel_size
+    ),
+    pts_backbone=dict(
+        type='SECOND',
+        in_channels=64,
+        out_channels=[64, 128, 256],
+        layer_nums=[3, 5, 5],
+        layer_strides=[2, 2, 2],
+        norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
+        conv_cfg=dict(type='Conv2d', bias=False)
+    ),
+    pts_neck=dict(
+        type='SECONDFPN',
+        in_channels=[64, 128, 256],
+        out_channels=[128, 128, 128],
+        upsample_strides=[0.5, 1, 2],
+        norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
+        upsample_cfg=dict(type='deconv', bias=False),
+        use_conv_for_no_stride=True
+    ),
+    pts_fusion_layer=dict(
+        type='V2XTransformerFusion',
+        in_channels=sum([128, 128, 128]),
+        n_head=3,
+        mid_channels=256,
+        dense_fusion=True,
+    ),
+    # train_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=train_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
+    # test_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=test_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
+    # temporal_backbone=dict(
+    #     type='TemporalIdentity',
+    #     position='last'
+    # ),
+    multi_task_head=dict(
+        type='MTHead',
+        det_head=dict(
+            type='CenterHeadModified',
+            in_channels=sum([128, 128, 128]),
+            tasks=det_tasks,
+            bbox_coder=dict(
+                type='CenterPointBBoxCoder',
+                post_center_range=det_center_range,
+                max_num=500,
+                score_threshold=0.1,
+                out_size_factor=det_out_factor,
+                voxel_size=voxel_size[:2],
+                pc_range=lidar_range[:2],
+                code_size=code_size),
+            common_heads=det_common_heads,
+            loss_cls=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
+            loss_bbox=dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
+            separate_head=dict(
+                type='SeparateHead',
+                head_conv=64,
+                init_bias=-2.19,
+                final_kernel=3
+            ),
+            share_conv_channel=64,
+            num_heatmap_convs=2,
+            norm_bbox=True,
+            with_velocity=det_with_velocity,
+        ),
+    ),
     pts_train_cfg=dict(
         voxel_size=voxel_size,
         point_cloud_range=lidar_range,
@@ -478,17 +553,8 @@ model = dict(
         max_objs=500,
         min_radius=2,
         code_weights=code_weights, # code_size
-
-        corr_dense_reg=1,
-        corr_max_objs=500,
-        corr_gaussian_overlap=0.5,
-        corr_min_radius=2,
-
-        task_weight=dict(
-            det=1.0,
-            motion=1.0,
-            corr=0.5
-        ),
+        train_mode=train_mode,
+        shared_weights=shared_weights,
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
@@ -502,19 +568,21 @@ model = dict(
         max_pool_nms=False,
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
     ),
-    # pts_fusion_cfg=dict(
-    #     train_ego_name=train_ego_name, # FIXME
-    #     test_ego_name=test_ego_name,
-    #     corr_pc_range=lidar_range,
-    # )
+    pts_fusion_cfg=dict(
+        corr_thresh = 0.2,
+        train_ego_name=ego_name, # FIXME
+        test_ego_name=ego_name,
+        corr_pc_range=lidar_range,
+    ),
     co_cfg=dict(
         infrastructure_name=infrastructure_name
     )
 )
 
+
+
 lr = 1 * 1e-4
 checkpoint_interval = 2
-max_checkpoint_num = 4
 log_interval = 1
 
 log_level = 'INFO'
@@ -529,7 +597,7 @@ default_hooks = dict(
                 sampler_seed=dict(type='DistSamplerSeedHook'),
                 logger=dict(type='LoggerHook', interval=log_interval),
                 param_scheduler=dict(type='ParamSchedulerHook'),
-                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval, max_keep_ckpts= max_checkpoint_num),
+                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
 custom_hooks = [
     dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/gpu_messages')
@@ -558,18 +626,18 @@ param_scheduler = [
     # lr * 1e-4
     dict(
         type='CosineAnnealingLR',
-        T_max=12,
+        T_max=8,
         eta_min=lr * 10,
         begin=0,
-        end=12,
+        end=8,
         by_epoch=True,
         convert_to_iter_based=True),
     dict(
         type='CosineAnnealingLR',
-        T_max=18,
+        T_max=12,
         eta_min=lr * 1e-4,
-        begin=12,
-        end=30,
+        begin=8,
+        end=20,
         by_epoch=True,
         convert_to_iter_based=True),
     # momentum scheduler
@@ -577,25 +645,25 @@ param_scheduler = [
     # during the next 12 epochs, momentum increases from 0.85 / 0.95 to 1
     dict(
         type='CosineAnnealingMomentum',
-        T_max=12,
+        T_max=8,
         eta_min=0.85 / 0.95,
         begin=0,
-        end=12,
+        end=8,
         by_epoch=True,
         convert_to_iter_based=True),
     dict(
         type='CosineAnnealingMomentum',
-        T_max=18,
+        T_max=12,
         eta_min=1,
-        begin=12,
-        end=30,
+        begin=8,
+        end=20,
         by_epoch=True,
         convert_to_iter_based=True)
 ]
 
 train_cfg = dict(
     type='EpochBasedTrainLoop',
-    max_epochs=30,
+    max_epochs=20,
     # val_interval=1
 )
 # val_cfg = dict(type='ValLoop')

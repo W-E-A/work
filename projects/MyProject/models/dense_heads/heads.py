@@ -825,6 +825,7 @@ class CorrGenerateHead(BaseModule):
                      heatmaps = None,
                      gt_masks = None,
                      dilate_heatmaps = None,
+                     corr_pos_nums = None,
                      loss_names = None,
                      gt_thres: float = 0.3):
         assert heatmaps is not None and gt_masks is not None and dilate_heatmaps is not None
@@ -852,6 +853,7 @@ class CorrGenerateHead(BaseModule):
             heatmaps, # c-1, b, 1, h, w
             gt_masks, # c-1, b, 1, h, w
             dilate_heatmaps, # c-1, b, 1, h, w
+            corr_pos_nums,
         )
         loss_dict[f'loss_corr_heatmap'] = loss_heatmap
 
@@ -933,10 +935,13 @@ class CorrGenerateHead(BaseModule):
         return_list = tuple(map(list, zip(*return_list)))
         return return_list
 
-    def prepare_corr_heatmaps(self, heatmaps, **kwargs):
+    def prepare_corr_heatmaps(self, heatmaps, pos_nums=None ,**kwargs):
         # intput list of c-1 h w tensor
         heatmaps = torch.stack(heatmaps, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous() # c-1, B, 1, h, w
         ret_list = [heatmaps]
+        if(pos_nums != None):
+            pos_nums = torch.stack(pos_nums, dim=0).unsqueeze(2).permute(1, 0, 2).contiguous()
+            ret_list.append(pos_nums)
         for _, v in kwargs.items():
             ret_list.append(torch.stack(v, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous()) # c-1, B, 1, h, w
         return tuple(ret_list)

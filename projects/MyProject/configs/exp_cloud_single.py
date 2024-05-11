@@ -60,7 +60,7 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 1 # CLOUD
+batch_size = 2 # CLOUD
 num_workers = 4 # CLOUD
 seq_length = 8
 present_idx = 2
@@ -73,6 +73,7 @@ sample_key_interval = 1
 # )
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
+ego_name = 'ego_vehicle'
 motion_only_vehicle = False
 motion_filter_invalid = False
 corr_only_vehicle = False
@@ -180,22 +181,22 @@ train_scene_pipline = [
         enable_visualize=False,
         verbose = False,
     ),
-    dict(
-        type = 'MakeMotionLabels',
-        pc_range_motion = motion_range,
-        voxel_size_motion = motion_voxel_size,
-        pc_range_lidar = lidar_range,
-        voxel_size_lidar = corr_voxel_size,
-        infrastructure_name = infrastructure_name,
-        just_present = False,
-        ego_id = -100,
-        motion_only_vehicle = motion_only_vehicle,
-        corr_only_vehicle = corr_only_vehicle,
-        motion_filter_invalid = motion_filter_invalid,
-        corr_filter_invalid = corr_filter_invalid,
-        vehicle_id_list = vehicle_id_list,
-        ignore_index = 255,
-    ),
+    # dict(
+    #     type = 'MakeMotionLabels',
+    #     pc_range_motion = motion_range,
+    #     voxel_size_motion = motion_voxel_size,
+    #     pc_range_lidar = lidar_range,
+    #     voxel_size_lidar = corr_voxel_size,
+    #     infrastructure_name = infrastructure_name,
+    #     just_present = False,
+    #     ego_id = -100,
+    #     motion_only_vehicle = motion_only_vehicle,
+    #     corr_only_vehicle = corr_only_vehicle,
+    #     motion_filter_invalid = motion_filter_invalid,
+    #     corr_filter_invalid = corr_filter_invalid,
+    #     vehicle_id_list = vehicle_id_list,
+    #     ignore_index = 255,
+    # ),
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
@@ -222,22 +223,22 @@ test_scene_pipline = [
         enable_visualize=False,
         verbose = False,
     ),
-    dict(
-        type = 'MakeMotionLabels',
-        pc_range_motion = motion_range,
-        voxel_size_motion = motion_voxel_size,
-        pc_range_lidar = lidar_range,
-        voxel_size_lidar = corr_voxel_size,
-        infrastructure_name = infrastructure_name,
-        just_present = False,
-        ego_id = -100,
-        motion_only_vehicle = motion_only_vehicle,
-        corr_only_vehicle = corr_only_vehicle,
-        motion_filter_invalid = motion_filter_invalid,
-        corr_filter_invalid = corr_filter_invalid,
-        vehicle_id_list = vehicle_id_list,
-        ignore_index = 255,
-    ),
+    # dict(
+    #     type = 'MakeMotionLabels',
+    #     pc_range_motion = motion_range,
+    #     voxel_size_motion = motion_voxel_size,
+    #     pc_range_lidar = lidar_range,
+    #     voxel_size_lidar = corr_voxel_size,
+    #     infrastructure_name = infrastructure_name,
+    #     just_present = False,
+    #     ego_id = -100,
+    #     motion_only_vehicle = motion_only_vehicle,
+    #     corr_only_vehicle = corr_only_vehicle,
+    #     motion_filter_invalid = motion_filter_invalid,
+    #     corr_filter_invalid = corr_filter_invalid,
+    #     vehicle_id_list = vehicle_id_list,
+    #     ignore_index = 255,
+    # ),
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
@@ -310,7 +311,8 @@ test_evaluator = dict(
 )
 
 model = dict(
-    type='CorrelationModel',
+    type='EgoModel',
+    corr_model = None,
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
         delete_pointcloud=delete_pointcloud,
@@ -362,29 +364,6 @@ model = dict(
         upsample_cfg=dict(type='deconv', bias=False),
         use_conv_for_no_stride=True
     ),
-    # pts_fusion_layer=dict(
-    #     type='V2XTransformerFusion',
-    #     in_channels=sum([128, 128, 128]),
-    #     n_head=3,
-    #     mid_channels=256,
-    #     dense_fusion=True,
-    # ),
-    # train_comm_expand_layer=dict(
-    #     type='GaussianConv',
-    #     kernel_size=train_comm_ksize,
-    #     sigma=1.0,
-    #     impl=True,
-    # ),
-    # test_comm_expand_layer=dict(
-    #     type='GaussianConv',
-    #     kernel_size=test_comm_ksize,
-    #     sigma=1.0,
-    #     impl=True,
-    # ),
-    # temporal_backbone=dict(
-    #     type='TemporalIdentity',
-    #     position='last'
-    # ),
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
@@ -414,60 +393,6 @@ model = dict(
             norm_bbox=True,
             with_velocity=det_with_velocity,
         ),
-        motion_head=dict(
-            type='IterativeFlow',
-            task_dict={
-                'segmentation': 2,
-                'instance_center': 1,
-                'instance_offset': 2,
-                'instance_flow': 2,
-            },
-            distribution_log_sigmas=[-5.0, 5.0],
-            class_weights=[1.0, 2.0],
-            in_channels=128,
-            feat_channel=384,
-            prob_latent_dim=32,
-            receptive_field=3,
-            n_future=5,
-            grid_conf = [lidar_range, det_voxel_size],
-            new_grid_conf = [motion_range, motion_voxel_size],
-            using_spatial_prob=True,
-            using_focal_loss=True,
-            n_gru_blocks=1,
-            future_discount=1,
-            loss_weights={
-                'loss_motion_seg': 5.0,
-                'loss_motion_centerness': 1.0,
-                'loss_motion_offset': 1.0,
-                'loss_motion_flow': 1.0,
-                'loss_motion_prob': 10.0,
-            },
-            sample_ignore_mode='past_valid',
-            posterior_with_label=False,
-        ),
-        corr_head=dict(
-            type='CorrGenerateHead',
-            pc_range=lidar_range,
-            voxel_size=corr_voxel_size,
-            n_future_and_present=seq_length - present_idx, # future and present
-            label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
-            in_channels=sum([128, 128, 128]),
-            loss_cfg=dict(
-                type='CorrelationLoss',
-                gamma=2.0,
-                smooth_beta=0.5,
-                pos_weight=1.0,
-                neg_weight=1.0,
-            ),
-            separate_head=dict(
-                type='SeparateHead',
-                head_conv=64,
-                init_bias=-2.19,
-                final_kernel=3
-            ),
-            share_conv_channel=64,
-            num_heatmap_convs=2,
-        ),
     ),
     pts_train_cfg=dict(
         voxel_size=voxel_size,
@@ -478,17 +403,6 @@ model = dict(
         max_objs=500,
         min_radius=2,
         code_weights=code_weights, # code_size
-
-        corr_dense_reg=1,
-        corr_max_objs=500,
-        corr_gaussian_overlap=0.5,
-        corr_min_radius=2,
-
-        task_weight=dict(
-            det=1.0,
-            motion=1.0,
-            corr=0.5
-        ),
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
@@ -502,15 +416,18 @@ model = dict(
         max_pool_nms=False,
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
     ),
-    # pts_fusion_cfg=dict(
-    #     train_ego_name=train_ego_name, # FIXME
-    #     test_ego_name=test_ego_name,
-    #     corr_pc_range=lidar_range,
-    # )
+    pts_fusion_cfg=dict(
+        corr_thresh = 0.3,
+        train_ego_name=ego_name, # FIXME
+        test_ego_name=ego_name,
+        corr_pc_range=lidar_range,
+    ),
     co_cfg=dict(
         infrastructure_name=infrastructure_name
     )
 )
+
+
 
 lr = 1 * 1e-4
 checkpoint_interval = 2
@@ -558,18 +475,18 @@ param_scheduler = [
     # lr * 1e-4
     dict(
         type='CosineAnnealingLR',
-        T_max=12,
+        T_max=8,
         eta_min=lr * 10,
         begin=0,
-        end=12,
+        end=8,
         by_epoch=True,
         convert_to_iter_based=True),
     dict(
         type='CosineAnnealingLR',
-        T_max=18,
+        T_max=12,
         eta_min=lr * 1e-4,
-        begin=12,
-        end=30,
+        begin=8,
+        end=20,
         by_epoch=True,
         convert_to_iter_based=True),
     # momentum scheduler
@@ -577,25 +494,25 @@ param_scheduler = [
     # during the next 12 epochs, momentum increases from 0.85 / 0.95 to 1
     dict(
         type='CosineAnnealingMomentum',
-        T_max=12,
+        T_max=8,
         eta_min=0.85 / 0.95,
         begin=0,
-        end=12,
+        end=8,
         by_epoch=True,
         convert_to_iter_based=True),
     dict(
         type='CosineAnnealingMomentum',
-        T_max=18,
+        T_max=12,
         eta_min=1,
-        begin=12,
-        end=30,
+        begin=8,
+        end=20,
         by_epoch=True,
         convert_to_iter_based=True)
 ]
 
 train_cfg = dict(
     type='EpochBasedTrainLoop',
-    max_epochs=30,
+    max_epochs=20,
     # val_interval=1
 )
 # val_cfg = dict(type='ValLoop')

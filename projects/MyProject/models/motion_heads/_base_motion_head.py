@@ -10,6 +10,8 @@ from ..loss_utils import MotionSegmentationLoss, SpatialRegressionLoss, Probabil
 from ..utils import BevFeatureSlicer
 from ...utils import FeatureWarper, predict_instance_segmentation_and_trajectories
 from ..modules.motion_modules import ResFuturePrediction, SpatialDistributionModule, DistributionModule
+from mmcv.cnn import ConvModule
+
 
 
 @MODELS.register_module()
@@ -22,7 +24,11 @@ class BaseMotionHead(BaseTaskHead):
         future_discount=0.95,
         # settings: model
         task_dict={},
+        feat_channels= 384,
         in_channels=256,
+        conv_cfg: dict = dict(type='Conv2d'),
+        norm_cfg: dict = dict(type='BN2d'),
+        bias: str = 'auto',
         inter_channels=None,
         n_gru_blocks=3,
         grid_conf = None,
@@ -78,6 +84,14 @@ class BaseMotionHead(BaseTaskHead):
 
         self.warper = FeatureWarper(pc_range=new_grid_conf[0])
         self.cropper =  BevFeatureSlicer(grid_conf, new_grid_conf)
+        self.downsample_conv = ConvModule(
+            feat_channels, # type: ignore
+            in_channels,
+            kernel_size=3,
+            padding=1,
+            conv_cfg=conv_cfg,
+            norm_cfg=norm_cfg,
+            bias=bias)
         if self.n_future > 0:
             distri_min_log_sigma, distri_max_log_sigma = distribution_log_sigmas
             # 当前的 feature + 未来的 label
