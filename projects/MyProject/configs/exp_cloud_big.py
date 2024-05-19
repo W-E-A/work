@@ -309,7 +309,7 @@ test_evaluator = dict(
 corr_model = dict(
     type='CorrelationModel',
     init_cfg=dict(type='Pretrained', 
-    checkpoint='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/wyc/train/wyc-deep-0511/epoch_20.pth'),
+    checkpoint='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/wyc/train/wyc-deep-0514/epoch_30.pth'),
     pts_voxel_encoder = dict(
         type = 'PillarFeatureNet',
         in_channels = 5 if use_multi_sweeps else 4,

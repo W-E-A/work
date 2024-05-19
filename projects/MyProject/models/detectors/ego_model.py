@@ -194,6 +194,25 @@ class EgoModel(MVXTwoStageDetector):
             for samples in input_samples_ego:
                 valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
                 ego_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+                # ego_instances.append(samples.gt_instances_3d)
+            
+            # ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
+
+            # input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
+            # for b in range(batch_size):
+            #     ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
+            # inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # 1*B
+            # for b in range(batch_size):
+            #     ego_track_id = ego_coop_instances[b].track_id
+            #     # other visible 
+            #     other_track_id = inf_coop_instances[b].track_id
+            #     in_mask = np.isin(ego_track_id, other_track_id)
+            #     new_isvalid = copy.deepcopy(ego_coop_instances[b].coop_isvalid)
+            #     new_isvalid[in_mask] = True
+            #     ego_coop_instances[b].coop_isvalid = new_isvalid # global valid bboxes for ego
+            # coop_instances = []
+            # for instance in ego_coop_instances: # type: ignore
+            #     coop_instances.append(instance[instance.coop_isvalid])
         else:
             # ego的所有输入
             input_dict_ego = present_seq[self.ego_id]['inputs'] # voxel batch
@@ -240,6 +259,12 @@ class EgoModel(MVXTwoStageDetector):
             for instance in ego_coop_instances: # type: ignore
                 coop_instances.append(instance[instance.coop_isvalid])
 
+            # ego_instances = []
+            # for samples in input_samples_ego:
+            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+            #     ego_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+            #     # ego_instances.append(samples.gt_instances_3d)
+
         if mode == 'loss':
             if self.train_mode == 'single':
                 det_forward_kwargs = {}
@@ -281,7 +306,8 @@ class EgoModel(MVXTwoStageDetector):
                     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_id,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -334,13 +360,84 @@ class EgoModel(MVXTwoStageDetector):
                             )
                         )
                         sample.gt_instances_3d = ego_instances[b] # type: ignore
+                        # sample.gt_instances_3d = coop_instances[b] # type: ignore
+
                         sample.gt_instances_3d.pop('track_id') # no need array
                         sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
-                        # sample.gt_instances_3d.pop('coop_isvalid') # no need array
+                        sample.gt_instances_3d.pop('coop_isvalid') # no need array
                         # sample.gt_instances_3d.pop('correlations') # no need array
                         sample.pred_instances_3d = pred_result[b]
                         det_ret_list.append(sample)
                 return det_ret_list
             else:
-                return []
+                #prepare motion label
+                ego_motion_labels = [present_seq[self.ego_id]['ego_motion_label']]
+                ego_motion_labels, ego_motion_inputs = self.corr_model.multi_task_head.corr_head.prepare_ego_labels(ego_motion_labels)
+                #获得路端推理结果
+                det_forward_kwargs = {}
+                motion_forward_kwargs = {
+                    'future_distribution_inputs':None,
+                    'noise':None
+                }
+                corr_forward_kwargs = {
+                    'ego_motion_inputs':ego_motion_inputs
+                }
+                infrastructure_feat_dict = self.corr_model.multi_task_head(
+                infrastructure_features,
+                det_forward_kwargs=det_forward_kwargs,
+                motion_forward_kwargs=motion_forward_kwargs,
+                corr_forward_kwargs=corr_forward_kwargs,
+                ) 
+
+                #得到相关性heatmap 以此筛选出协调区域
+                gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                for idx in range(len(gt_corr_heatmaps)):
+                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_id,:,:]
+                gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
+                pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
+
+                #对路端特帧进行位姿变换
+                present_pose_matrix = []
+                for b in range(batch_size):
+                    present_pose_matrix.append(scene_info[b].pose_matrix[present_idx, self.infrastructure_id, self.ego_id, ...]) # use ego to other1, other2, ... # type: ignore
+                present_pose_matrix = torch.tensor(present_pose_matrix)
+                infrastructure_feature = infrastructure_features[0] # C, H, W
+                infrastructure_feature = corr_mask.float() * infrastructure_feature
+                warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
+                warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
+                #融合
+                ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
+
+
+                ego_feat_dict = self.multi_task_head(ego_fusion_result,det_forward_kwargs=det_forward_kwargs)
+                det_pred_kwargs = {
+                'batch_input_metas':ego_metas
+                }
+                predict_dict = self.multi_task_head.predict(ego_feat_dict,det_pred_kwargs=det_pred_kwargs)
+                if 'det_pred' in predict_dict:
+                    det_ret_list = []
+                    pred_result = predict_dict['det_pred'] # add to pred_instances_3d from None to instance of bboxes_3d scores_3d labels_3d
+                    for b in range(batch_size):
+                        sample = Det3DDataSample()
+                        sample.set_metainfo(
+                            dict(
+                                scene_sample_idx = scene_info[b].sample_idx,
+                                scene_name = scene_info[b].scene_name,
+                                agent_name = self.test_ego_name, # FIXME
+                                sample_idx = ego_metas[b]['sample_idx'], # type: ignore
+                                box_type_3d = ego_metas[b]['box_type_3d'], # type: ignore
+                                lidar_path = ego_metas[b]['lidar_path'], # type: ignore
+                            )
+                        )
+                        sample.gt_instances_3d = ego_instances[b] # type: ignore
+                        # sample.gt_instances_3d = coop_instances[b] # type: ignore
+                        
+                        sample.gt_instances_3d.pop('track_id') # no need array
+                        sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
+                        sample.gt_instances_3d.pop('coop_isvalid') # no need array
+                        sample.pred_instances_3d = pred_result[b]
+                        det_ret_list.append(sample)
+                return det_ret_list
+
             
