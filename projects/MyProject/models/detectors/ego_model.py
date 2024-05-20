@@ -318,7 +318,7 @@ class EgoModel(MVXTwoStageDetector):
                     present_pose_matrix.append(scene_info[b].pose_matrix[present_idx, self.infrastructure_id, self.ego_id, ...]) # use ego to other1, other2, ... # type: ignore
                 present_pose_matrix = torch.tensor(present_pose_matrix)
                 infrastructure_feature = infrastructure_features[0] # C, H, W
-                infrastructure_feature = corr_mask.float() * infrastructure_feature
+                # infrastructure_feature = corr_mask.float() * infrastructure_feature
                 warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
                 warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
                 #融合
