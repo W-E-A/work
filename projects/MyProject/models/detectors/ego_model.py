@@ -246,6 +246,9 @@ class EgoModel(MVXTwoStageDetector):
             ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
             for b in range(batch_size):
                 ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
+            # for samples in input_samples:
+            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+            #     inf_coop_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
             inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # 1*B
             for b in range(batch_size):
                 ego_track_id = ego_coop_instances[b].track_id
@@ -395,7 +398,9 @@ class EgoModel(MVXTwoStageDetector):
                     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_id,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                corr_mask = pred_corr_heatmap > self.corr_thresh
+
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -430,8 +435,8 @@ class EgoModel(MVXTwoStageDetector):
                                 lidar_path = ego_metas[b]['lidar_path'], # type: ignore
                             )
                         )
-                        sample.gt_instances_3d = ego_instances[b] # type: ignore
-                        # sample.gt_instances_3d = coop_instances[b] # type: ignore
+                        # sample.gt_instances_3d = ego_instances[b] # type: ignore
+                        sample.gt_instances_3d = coop_instances[b] # type: ignore
                         
                         sample.gt_instances_3d.pop('track_id') # no need array
                         sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
