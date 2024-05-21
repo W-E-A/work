@@ -56,31 +56,31 @@ class EgoModel(MVXTwoStageDetector):
             multi_task_head.update(train_cfg = pts_train_cfg)
             multi_task_head.update(test_cfg = pts_test_cfg)
             self.multi_task_head = MODELS.build(multi_task_head)
-        if freeze_inf_model:
-            for shared_module_name in self.pts_train_cfg.get('shared_weights',[]):
-                items = shared_module_name.split('.')
-                shared_module = self
-                for item in items:
-                    shared_module = getattr(shared_module, item)
-                freeze_module(shared_module)
-                print(f'Freeze: {shared_module_name} !!!!!!!!')
 
         if self.pts_train_cfg:
             self.train_mode = self.pts_train_cfg.get('train_mode', 'single') # type: ignore
             assert self.train_mode in ('single', 'fusion')
+
+            if freeze_inf_model:
+                for shared_module_name in self.pts_train_cfg.get('shared_weights', []):
+                    items = shared_module_name.split('.')
+                    shared_module = self
+                    for item in items:
+                        shared_module = getattr(shared_module, item)
+                    freeze_module(shared_module)
+                    print(f'Freeze: {shared_module_name} !!!!!!!!')
 
         if self.pts_test_cfg:
             pass
 
         if self.pts_fusion_cfg:
             self.corr_thresh = self.pts_fusion_cfg.get("corr_thresh", 0.2)
-            self.train_ego_name = self.pts_fusion_cfg.get("train_ego_name", "ego_vehicle")
-            self.test_ego_name = self.pts_fusion_cfg.get("test_ego_name", "ego_vehicle")
-            self.pc_range = self.pts_fusion_cfg.get("pc_range", [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0])
-            self.warp_size = (self.pc_range[3], self.pc_range[4])
+            pc_range = self.pts_fusion_cfg.get("pc_range", [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0])
+            self.warp_size = (0.5 * (pc_range[3] - pc_range[0]), 0.5 * (pc_range[4] - pc_range[1]))
 
         if self.co_cfg:
             self.infrastructure_name = self.co_cfg.get('infrastructure_name', 'infrastructure')
+            self.ego_name = self.co_cfg.get('ego_name', 'ego_vehicle')
 
     def extract_pts_feat(
         self,
@@ -171,8 +171,12 @@ class EgoModel(MVXTwoStageDetector):
         scene_name = scene_info_0.scene_name
         seq_timestamps_0 = scene_info_0.seq_timestamps[0]
         save_dir = f'{scene_name}_{seq_timestamps_0}'
+        ego_ids = list(range(co_length))
         self.infrastructure_id = co_agents.index(self.infrastructure_name)
-        self.ego_id = co_agents.index(self.train_ego_name)
+        ego_ids.remove(self.infrastructure_id)
+        temp_dict = {id:i for i, id in enumerate(ego_ids)}
+        self.ego_id = co_agents.index(self.ego_name)
+        self.ego_idx = temp_dict[self.ego_id]
         present_seq = example_seq[present_idx]
 
         if self.train_mode == 'single':
@@ -189,15 +193,16 @@ class EgoModel(MVXTwoStageDetector):
                 return_backbone_features = False,
                 return_neck_features = True) # FIXME 4 times
             ego_features = pts_feat_dict_ego['neck_features'] # B C H W
-            # gt
+
+            # choose gt here
+            # visible targets only
             ego_instances = []
             for samples in input_samples_ego:
                 valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
                 ego_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
-                # ego_instances.append(samples.gt_instances_3d)
-            
-            # ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
 
+            # coop targets
+            # ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
             # input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
             # for b in range(batch_size):
             #     ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
@@ -213,6 +218,7 @@ class EgoModel(MVXTwoStageDetector):
             # coop_instances = []
             # for instance in ego_coop_instances: # type: ignore
             #     coop_instances.append(instance[instance.coop_isvalid])
+
         else:
             # ego的所有输入
             input_dict_ego = present_seq[self.ego_id]['inputs'] # voxel batch
@@ -243,12 +249,10 @@ class EgoModel(MVXTwoStageDetector):
             infrastructure_features = pts_feat_dict_inf['neck_features'] # B C H W
 
             # gt
+            # coop targets
             ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
             for b in range(batch_size):
                 ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
-            # for samples in input_samples:
-            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
-            #     inf_coop_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
             inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # 1*B
             for b in range(batch_size):
                 ego_track_id = ego_coop_instances[b].track_id
@@ -262,22 +266,16 @@ class EgoModel(MVXTwoStageDetector):
             for instance in ego_coop_instances: # type: ignore
                 coop_instances.append(instance[instance.coop_isvalid])
 
-            # ego_instances = []
-            # for samples in input_samples_ego:
-            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
-            #     ego_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
-            #     # ego_instances.append(samples.gt_instances_3d)
-
         if mode == 'loss':
             if self.train_mode == 'single':
                 det_forward_kwargs = {}
                 ego_feat_dict = self.multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs) 
                 heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(ego_instances)
                 det_loss_kwargs = {
-                'heatmaps':heatmaps,# necessary
-                'anno_boxes':anno_boxes,# necessary
-                'inds':inds,# necessary
-                'masks':masks,# necessary
+                    'heatmaps':heatmaps,# necessary
+                    'anno_boxes':anno_boxes,# necessary
+                    'inds':inds,# necessary
+                    'masks':masks,# necessary
                 }
                 loss_dict = self.multi_task_head.loss(ego_feat_dict,
                                                     det_loss_kwargs=det_loss_kwargs)
@@ -303,11 +301,63 @@ class EgoModel(MVXTwoStageDetector):
                     motion_forward_kwargs=motion_forward_kwargs,
                     corr_forward_kwargs=corr_forward_kwargs,
                 )
+
                 #得到相关性heatmap 以此筛选出协调区域
                 gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
                 for idx in range(len(gt_corr_heatmaps)):
-                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_id,:,:]
+                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
+                #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx:self.ego_idx+1,:,:]
+                # corr_heatmaps_label, = self.corr_model.multi_task_head.corr_head.prepare_corr_heatmaps(
+                #     gt_corr_heatmaps
+                # ) # c-1, B, 1, h, w
+                # ################################ SHOW CORRELATION HEATMAP ################################
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+
+                # maps = corr_heatmaps_label[0][0]
+                # visualizer.draw_featmap(maps)
+                # visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{self.ego_name}_correlation_heatmap_gt.png')
+                # visualizer.clean()
+
+                # # for idx, name in enumerate(ego_names):
+                # #     maps = corr_heatmaps_label[idx][0]
+                # #     visualizer.draw_featmap(maps)
+                # #     visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt.png')
+                # #     visualizer.clean()
+                # #     if name == 'ego_vehicle':
+                # #         a = corr_gt_masks[idx][0]
+                # #         b = corr_dilate_heatmaps[idx][0]
+
+                # #         visualizer.draw_featmap(a.float())
+                # #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_a.png')
+                # #         visualizer.clean()
+                # #         visualizer.draw_featmap((b > 0).float())
+                # #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_b.png')
+                # #         visualizer.clean()
+                # #         visualizer.draw_featmap((b > 0).float())
+                # #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_b.png')
+                # #         visualizer.clean()
+
+                # #         focal_neg_gt = torch.ones_like(maps, dtype=maps.dtype, device=maps.device)
+                # #         dilate_pos = b > 0
+                # #         dilate_pos[a] = False
+                # #         focal_neg_gt[dilate_pos] = b[dilate_pos]
+                # #         focal_neg_gt[a] = maps[a]
+                # #         visualizer.draw_featmap(focal_neg_gt)
+                # #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_focal_neg_gt.png')
+                # #         visualizer.clean()
+                # #         visualizer.draw_featmap(focal_neg_gt - maps)
+                # #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_focal_neg_gt_neg_weights.png')
+                # #         visualizer.clean()
+
+                # import pdb
+                # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                # ################################ SHOW CORRELATION HEATMAP ################################
+
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
                 # corr_mask = gt_corr_heatmaps > self.corr_thresh
                 corr_mask = pred_corr_heatmap > self.corr_thresh
@@ -326,13 +376,13 @@ class EgoModel(MVXTwoStageDetector):
 
                 #fusion det loss
                 det_forward_kwargs = {}
-                fusion_feat_dict = self.multi_task_head(ego_fusion_result,det_forward_kwargs=det_forward_kwargs) 
-                heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(coop_instances)
+                fusion_feat_dict = self.multi_task_head(ego_fusion_result,det_forward_kwargs=det_forward_kwargs)
+                heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(coop_instances) # FIXME 这个不对，不能用于监督！
                 det_loss_kwargs = {
-                'heatmaps':heatmaps,# necessary
-                'anno_boxes':anno_boxes,# necessary
-                'inds':inds,# necessary
-                'masks':masks,# necessary
+                    'heatmaps':heatmaps,# necessary
+                    'anno_boxes':anno_boxes,# necessary
+                    'inds':inds,# necessary
+                    'masks':masks,# necessary
                 }
                 loss_dict = self.multi_task_head.loss(fusion_feat_dict,
                                                     det_loss_kwargs=det_loss_kwargs)
@@ -356,7 +406,7 @@ class EgoModel(MVXTwoStageDetector):
                             dict(
                                 scene_sample_idx = scene_info[b].sample_idx,
                                 scene_name = scene_info[b].scene_name,
-                                agent_name = self.test_ego_name, # FIXME
+                                agent_name = self.ego_name,
                                 sample_idx = ego_metas[b]['sample_idx'], # type: ignore
                                 box_type_3d = ego_metas[b]['box_type_3d'], # type: ignore
                                 lidar_path = ego_metas[b]['lidar_path'], # type: ignore
@@ -395,7 +445,7 @@ class EgoModel(MVXTwoStageDetector):
                 #得到相关性heatmap 以此筛选出协调区域
                 gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
                 for idx in range(len(gt_corr_heatmaps)):
-                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_id,:,:]
+                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
                 # corr_mask = gt_corr_heatmaps > self.corr_thresh
@@ -429,7 +479,7 @@ class EgoModel(MVXTwoStageDetector):
                             dict(
                                 scene_sample_idx = scene_info[b].sample_idx,
                                 scene_name = scene_info[b].scene_name,
-                                agent_name = self.test_ego_name, # FIXME
+                                agent_name = self.ego_name,
                                 sample_idx = ego_metas[b]['sample_idx'], # type: ignore
                                 box_type_3d = ego_metas[b]['box_type_3d'], # type: ignore
                                 lidar_path = ego_metas[b]['lidar_path'], # type: ignore

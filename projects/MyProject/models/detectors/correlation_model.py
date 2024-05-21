@@ -165,8 +165,10 @@ class CorrelationModel(MVXTwoStageDetector):
         ego_ids = list(range(co_length))
         self.infrastructure_id = co_agents.index(self.infrastructure_name)
         ego_ids.remove(self.infrastructure_id)
+        temp_dict = {id:i for i, id in enumerate(ego_ids)}
         ego_ids = random.sample(ego_ids,2)
         ego_ids.sort()
+        ego_idxs = [temp_dict[id] for id in ego_ids]
         ego_names = [co_agents[id] for id in ego_ids]
         present_seq = example_seq[present_idx]
         
@@ -292,10 +294,10 @@ class CorrelationModel(MVXTwoStageDetector):
             corr_dilate_heatmaps = present_seq[self.infrastructure_id]['corr_dilate_heatmaps']
             corr_pos_nums = present_seq[self.infrastructure_id]['corr_pos_nums']
             for idx in range(len(corr_heatmaps)):
-                corr_heatmaps[idx] = corr_heatmaps[idx][ego_ids,:,:]
-                corr_gt_masks[idx] = corr_gt_masks[idx][ego_ids,:,:]
-                corr_dilate_heatmaps[idx] = corr_dilate_heatmaps[idx][ego_ids,:,:]
-                corr_pos_nums[idx] = corr_pos_nums[idx][ego_ids]
+                corr_heatmaps[idx] = corr_heatmaps[idx][ego_idxs,:,:]
+                corr_gt_masks[idx] = corr_gt_masks[idx][ego_idxs,:,:]
+                corr_dilate_heatmaps[idx] = corr_dilate_heatmaps[idx][ego_idxs,:,:]
+                corr_pos_nums[idx] = corr_pos_nums[idx][ego_idxs]
             corr_heatmaps_label, corr_pos_nums, corr_gt_masks, corr_dilate_heatmaps = self.multi_task_head.corr_head.prepare_corr_heatmaps(
                 corr_heatmaps,
                 corr_pos_nums,

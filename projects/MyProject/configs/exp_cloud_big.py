@@ -3,24 +3,34 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
-# full with multi sweeps
-train_annfile_path = '/mnt/auto-labeling/wyc/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
-val_annfile_path = '/mnt/auto-labeling/wyc/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
-
-# full no sweeps
-# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
-# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
-
-# debug with multi sweeps
-# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
-
-# debug no sweeps
-# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
-# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
-
+debug = True # CLOUD
 use_multi_sweeps = True
-delete_pointcloud = True # CLOUD
+
+if debug:
+    
+    if use_multi_sweeps:
+        # debug with multi sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+    else:
+        # debug no sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
+
+    delete_pointcloud = False
+
+else:
+    
+    if use_multi_sweeps:
+        # full with multi sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
+    else:
+        # full no sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
+
+    delete_pointcloud = True
 
 classes = [
     'car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian'
@@ -60,8 +70,8 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 2 # CLOUD
-num_workers = 4 # CLOUD
+batch_size = 1 if debug else 2 # CLOUD
+num_workers = 1 if debug else 4 # CLOUD
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
@@ -251,7 +261,7 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=True), # CLOUD
+          shuffle=False if debug else True), # CLOUD
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path,
@@ -570,12 +580,11 @@ model = dict(
     ),
     pts_fusion_cfg=dict(
         corr_thresh = 0.1,
-        train_ego_name=ego_name, # FIXME
-        test_ego_name=ego_name,
-        corr_pc_range=lidar_range,
+        pc_range = lidar_range,
     ),
     co_cfg=dict(
-        infrastructure_name=infrastructure_name
+        infrastructure_name = infrastructure_name,
+        ego_name = ego_name
     )
 )
 
@@ -599,9 +608,9 @@ default_hooks = dict(
                 param_scheduler=dict(type='ParamSchedulerHook'),
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
-custom_hooks = [
+custom_hooks = [] if debug else [
     dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/gpu_messages')
-] # CLOUD
+]# CLOUD
 
 env_cfg = dict(
     cudnn_benchmark=True,
