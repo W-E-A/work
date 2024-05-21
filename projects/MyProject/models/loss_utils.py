@@ -8,6 +8,7 @@ from mmdet3d.models.utils import clip_sigmoid
 @MODELS.register_module()
 class CorrelationLoss(nn.Module):
     def __init__(self,
+        alpha: float = 2.0,
         gamma: float = 2.0,
         smooth_beta: float = 0.5,
         pos_weight: float = 1.0,
@@ -17,13 +18,23 @@ class CorrelationLoss(nn.Module):
         # self.loss_fn = F.smooth_l1_loss
         self.loss_fn = F.l1_loss
 
+        self.alpha = alpha
         self.gamma = gamma
         self.smooth_beta = smooth_beta
         assert self.smooth_beta <= 1 and self.smooth_beta > 0
         self.pos_weight = pos_weight
         self.neg_weight = neg_weight
     
-    def forward(self, prediction, gt, gt_mask, dilate_gt):
+    def RescaleFocalLoss(self, pred, gt):
+        eps = 1e-12
+        mask = pred < gt
+        loss1 = -(1-pred/(gt+eps)).pow(self.alpha) * (pred/(gt+eps)).log()
+
+        loss2 = -(1-(1-pred)/(1-gt+eps)).pow(self.alpha) * ((1-pred)/(1-gt+eps) + eps).log()       
+
+        return loss1 * mask.float() + loss2 * (~mask).float()
+
+    def forward(self, prediction, gt, gt_mask, dilate_gt, corr_pos_num):
         eps = 1e-12
         pos_weights = gt_mask.float()
 
@@ -35,14 +46,19 @@ class CorrelationLoss(nn.Module):
         
         neg_weights = (focal_neg_gt - gt).pow(self.gamma)
 
-        # neg_weights = (1 - gt).pow(self.gamma) # ???
+        #L1loss
+        # raw_loss = self.loss_fn(prediction, gt, reduction='none')
+        # weight_loss = self.pos_weight * pos_weights * raw_loss + self.neg_weight * neg_weights * raw_loss
 
-        # raw_loss = self.loss_fn(prediction, gt, reduction='none', beta=self.smooth_beta)
-        raw_loss = self.loss_fn(prediction, gt, reduction='none')
+        pos_loss = self.RescaleFocalLoss(prediction, gt)
 
-        weight_loss = self.pos_weight * pos_weights * raw_loss + self.neg_weight * neg_weights * raw_loss
-        num_pos = gt_mask.float().sum().item()
-        final_loss = weight_loss.sum()
+        neg_loss = -(1 - prediction + eps).log() * prediction.pow(self.alpha) * neg_weights
+
+        weight_loss = self.pos_weight * pos_weights * pos_loss + self.neg_weight * neg_weights * neg_loss
+
+        # num_pos = gt_mask.float().sum().item()
+        num_pos = corr_pos_num.sum().item()
+        final_loss = weight_loss.sum()/num_pos
         return final_loss
 
 
