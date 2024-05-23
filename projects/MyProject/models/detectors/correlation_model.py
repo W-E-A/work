@@ -166,14 +166,12 @@ class CorrelationModel(MVXTwoStageDetector):
         self.infrastructure_id = co_agents.index(self.infrastructure_name)
         ego_ids.remove(self.infrastructure_id)
         temp_dict = {id:i for i, id in enumerate(ego_ids)}
-        ego_ids = random.sample(ego_ids,2)
+        ego_ids = random.sample(ego_ids,random.sample([1,2,3,4],1)[0])
         ego_ids.sort()
         ego_idxs = [temp_dict[id] for id in ego_ids]
         ego_names = [co_agents[id] for id in ego_ids]
         present_seq = example_seq[present_idx]
         
-        
-
         ################################ INPUT DEBUG (stop here) ################################
         # assert batch_size == 1
         # scene_info_0.pop('pose_matrix')
@@ -294,7 +292,7 @@ class CorrelationModel(MVXTwoStageDetector):
             corr_dilate_heatmaps = present_seq[self.infrastructure_id]['corr_dilate_heatmaps']
             corr_pos_nums = present_seq[self.infrastructure_id]['corr_pos_nums']
             for idx in range(len(corr_heatmaps)):
-                corr_heatmaps[idx] = corr_heatmaps[idx][ego_idxs,:,:]
+                corr_heatmaps[idx] = corr_heatmaps[idx][ego_idxs,:,:] # ???
                 corr_gt_masks[idx] = corr_gt_masks[idx][ego_idxs,:,:]
                 corr_dilate_heatmaps[idx] = corr_dilate_heatmaps[idx][ego_idxs,:,:]
                 corr_pos_nums[idx] = corr_pos_nums[idx][ego_idxs]
@@ -326,16 +324,16 @@ class CorrelationModel(MVXTwoStageDetector):
             #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_b.png')
             #         visualizer.clean()
 
-            #         focal_neg_gt = torch.ones_like(maps, dtype=maps.dtype, device=maps.device)
+            #         gaussian_neg_gt = torch.ones_like(maps, dtype=maps.dtype, device=maps.device)
             #         dilate_pos = b > 0
             #         dilate_pos[a] = False
-            #         focal_neg_gt[dilate_pos] = b[dilate_pos]
-            #         focal_neg_gt[a] = maps[a]
-            #         visualizer.draw_featmap(focal_neg_gt)
-            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_focal_neg_gt.png')
+            #         gaussian_neg_gt[dilate_pos] = b[dilate_pos]
+            #         gaussian_neg_gt[a] = maps[a]
+            #         visualizer.draw_featmap(gaussian_neg_gt)
+            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_gaussian_neg_gt.png')
             #         visualizer.clean()
-            #         visualizer.draw_featmap(focal_neg_gt - maps)
-            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_focal_neg_gt_neg_weights.png')
+            #         visualizer.draw_featmap(gaussian_neg_gt - maps)
+            #         visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_gt_gaussian_neg_gt_neg_weights.png')
             #         visualizer.clean()
 
             # import pdb
@@ -351,7 +349,6 @@ class CorrelationModel(MVXTwoStageDetector):
                 'dilate_heatmaps':corr_dilate_heatmaps, # necessary
                 'corr_pos_nums':corr_pos_nums,
                 'loss_names':ego_names, # optional
-                'gt_thres':0 # optional
             }
 
             loss_dict = self.multi_task_head.loss(
@@ -369,6 +366,9 @@ class CorrelationModel(MVXTwoStageDetector):
                     loss_dict[k] *= self.task_weight['corr']
                 else:
                     loss_dict[k] *= self.task_weight['det']
+
+            # import pdb
+            # pdb.set_trace()
 
             return loss_dict
         else:

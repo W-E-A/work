@@ -826,8 +826,7 @@ class CorrGenerateHead(BaseModule):
                      gt_masks = None,
                      dilate_heatmaps = None,
                      corr_pos_nums = None,
-                     loss_names = None,
-                     gt_thres: float = 0.3):
+                     loss_names = None,):
         assert heatmaps is not None and gt_masks is not None and dilate_heatmaps is not None
         loss_dict = {}
         names = list(range(len(preds_list)))
@@ -836,26 +835,27 @@ class CorrGenerateHead(BaseModule):
 
         # import pdb;pdb.set_trace()
 
-        # for name, pred_result, heatmap, gt_mask, dilate_heatmap in zip(names, preds_list, heatmaps, gt_masks, dilate_heatmaps):
-        #     pred_result = pred_result[0]
-        #     pred_heatmap = clip_sigmoid(pred_result['heatmap']) # b, 1, h, w
-        #     loss_heatmap = self.heatmap_criterion(
-        #         pred_heatmap, # b, 1, h, w
-        #         heatmap, # b, 1, h, w
-        #         gt_mask, # b, 1, h, w
-        #         dilate_heatmap, # b, 1, h, w
-        #     )
-        #     loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
+        for name, pred_result, heatmap, gt_mask, dilate_heatmap, pos_num in zip(names, preds_list, heatmaps, gt_masks, dilate_heatmaps, corr_pos_nums):
+            pred_result = pred_result[0]
+            pred_heatmap = clip_sigmoid(pred_result['heatmap']) # b, 1, h, w
+            loss_heatmap = self.heatmap_criterion(
+                pred_heatmap, # b, 1, h, w
+                heatmap, # b, 1, h, w
+                gt_mask, # b, 1, h, w
+                dilate_heatmap, # b, 1, h, w
+                pos_num, # b, 1
+            )
+            loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
 
-        pred_heatmap = torch.stack([clip_sigmoid(v[0]['heatmap']) for v in preds_list], dim=0)
-        loss_heatmap = self.heatmap_criterion(
-            pred_heatmap, # c-1, b, 1, h, w
-            heatmaps, # c-1, b, 1, h, w
-            gt_masks, # c-1, b, 1, h, w
-            dilate_heatmaps, # c-1, b, 1, h, w
-            corr_pos_nums,
-        )
-        loss_dict[f'loss_corr_heatmap'] = loss_heatmap
+        # pred_heatmap = torch.stack([clip_sigmoid(v[0]['heatmap']) for v in preds_list], dim=0)
+        # loss_heatmap = self.heatmap_criterion(
+        #     pred_heatmap, # c-1, b, 1, h, w
+        #     heatmaps, # c-1, b, 1, h, w
+        #     gt_masks, # c-1, b, 1, h, w
+        #     dilate_heatmaps, # c-1, b, 1, h, w
+        #     corr_pos_nums,
+        # )
+        # loss_dict[f'loss_corr_heatmap'] = loss_heatmap
 
         return loss_dict
 
@@ -940,7 +940,7 @@ class CorrGenerateHead(BaseModule):
         heatmaps = torch.stack(heatmaps, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous() # c-1, B, 1, h, w
         ret_list = [heatmaps]
         if(pos_nums != None):
-            pos_nums = torch.stack(pos_nums, dim=0).unsqueeze(2).permute(1, 0, 2).contiguous()
+            pos_nums = torch.stack(pos_nums, dim=0).unsqueeze(2).permute(1, 0, 2).contiguous() # c-1, B, 1
             ret_list.append(pos_nums)
         for _, v in kwargs.items():
             ret_list.append(torch.stack(v, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous()) # c-1, B, 1, h, w

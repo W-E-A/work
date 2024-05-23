@@ -8,9 +8,8 @@ from mmdet3d.models.utils import clip_sigmoid
 @MODELS.register_module()
 class CorrelationLoss(nn.Module):
     def __init__(self,
-        alpha: float = 2.0,
-        gamma: float = 2.0,
-        smooth_beta: float = 0.5,
+        focal_gamma: float = 2.0,
+        gaussian_gamma: float = 1.0,
         pos_weight: float = 1.0,
         neg_weight: float = 1.0,
         ):
@@ -18,19 +17,18 @@ class CorrelationLoss(nn.Module):
         # self.loss_fn = F.smooth_l1_loss
         self.loss_fn = F.l1_loss
 
-        self.alpha = alpha
-        self.gamma = gamma
-        self.smooth_beta = smooth_beta
-        assert self.smooth_beta <= 1 and self.smooth_beta > 0
+        self.focal_gamma = focal_gamma
+        self.gaussian_gamma = gaussian_gamma
         self.pos_weight = pos_weight
         self.neg_weight = neg_weight
     
     def RescaleFocalLoss(self, pred, gt):
         eps = 1e-12
         mask = pred < gt
-        loss1 = -(1-pred/(gt+eps)).pow(self.alpha) * (pred/(gt+eps)).log()
+        
+        loss1 = -(1-pred/(gt+eps)).pow(self.focal_gamma) * (pred/(gt+eps)).log()
 
-        loss2 = -(1-(1-pred)/(1-gt+eps)).pow(self.alpha) * ((1-pred)/(1-gt+eps) + eps).log()       
+        loss2 = -(1-(1-pred)/(1-gt+eps)).pow(self.focal_gamma) * ((1-pred)/(1-gt+eps) + eps).log()       
 
         return loss1 * mask.float() + loss2 * (~mask).float()
 
@@ -38,13 +36,13 @@ class CorrelationLoss(nn.Module):
         eps = 1e-12
         pos_weights = gt_mask.float()
 
-        focal_neg_gt = torch.ones_like(gt, dtype=gt.dtype, device=gt.device)
+        gaussian_neg_gt = torch.ones_like(gt, dtype=gt.dtype, device=gt.device)
         dilate_pos = dilate_gt > 0
         dilate_pos[gt_mask] = False
-        focal_neg_gt[dilate_pos] = dilate_gt[dilate_pos]
-        focal_neg_gt[gt_mask] = gt[gt_mask]
+        gaussian_neg_gt[dilate_pos] = dilate_gt[dilate_pos]
+        gaussian_neg_gt[gt_mask] = gt[gt_mask]
         
-        neg_weights = (focal_neg_gt - gt).pow(self.gamma)
+        neg_weights = (gaussian_neg_gt - gt).pow(self.gaussian_gamma)
 
         #L1loss
         # raw_loss = self.loss_fn(prediction, gt, reduction='none')
@@ -52,7 +50,8 @@ class CorrelationLoss(nn.Module):
 
         pos_loss = self.RescaleFocalLoss(prediction, gt)
 
-        neg_loss = -(1 - prediction + eps).log() * prediction.pow(self.alpha) * neg_weights
+        # neg_loss = -(1 - prediction + eps).log() * prediction.pow(self.focal_gamma) * neg_weights # bug ???
+        neg_loss = -(1 - prediction + eps).log() * prediction.pow(self.focal_gamma)
 
         weight_loss = self.pos_weight * pos_weights * pos_loss + self.neg_weight * neg_weights * neg_loss
 

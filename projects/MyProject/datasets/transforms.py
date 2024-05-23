@@ -534,11 +534,11 @@ class CorrelationFilter(BaseTransform):
         for i, timestamp in enumerate(future_seq_position):
             gt_instances_3d = example_seq[timestamp][infrastructure_idx]['data_samples'].gt_instances_3d.clone()
 
-            # if self.only_vehicle:
+            # if self.only_vehicle: # 为了生成相关性必须包括场景中所有的对象
             #     vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
             #     gt_instances_3d = gt_instances_3d[vehicle_mask]
 
-            # gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target bug do not modify
+            # gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # only visible target bug do not modify 因为visible导致track丢失会出现bug，所以必须按照真实轨迹
 
             lidar2agent = np.array(example_seq[timestamp][infrastructure_idx]['data_samples'].metainfo['lidar2ego'], dtype=np.float32) # type: ignore
             agent2present = future_motion_matrix[infrastructure_idx][i]
@@ -696,6 +696,7 @@ class MakeMotionLabels(BaseTransform):
         voxel_size_lidar,
         infrastructure_name: str = 'infrastructure',
         mode: str = 'normal',
+        generate_corr_heatmap = True,
         just_present: bool = False,
         ego_id: int = -100,
         motion_only_vehicle: bool = False,
@@ -735,11 +736,11 @@ class MakeMotionLabels(BaseTransform):
         self.warp_size_lidar = (0.5 * (self.pc_range_lidar[3] - self.pc_range_lidar[0]), 0.5 * (self.pc_range_lidar[4] - self.pc_range_lidar[1]))
 
         self.mode = mode
-        assert self.mode in ('normal', 'ego', 'inf', 'corr')
-        # normal 返回所有目标的motion
+        assert self.mode in ('normal', 'ego', 'inf')
+        # normal 返回所有目标的motion，为默认选项
         # ego 返回所有ego自己在inf坐标系的motion
         # inf 仅返回inf的所有目标的motion
-        # corr 必须先运行CorrelationFilter使得infra的每个目标有个打分
+        self.generate_corr_heatmap = generate_corr_heatmap # 必须先运行CorrelationFilter使得infra的每个目标有个打分
         self.just_present = just_present
         self.infrastructure_name = infrastructure_name
         self.ego_id = ego_id
@@ -857,51 +858,54 @@ class MakeMotionLabels(BaseTransform):
             elif self.mode == 'inf':
                 input_dict['example_seq'][present_idx][j]['inf_motion_label'] = motion_label
 
-        
-        #corr_heatmap_generate
-        self.grid_size = self.grid_size_lidar
-        self.offset_xy = self.offset_xy_lidar
-        self.warp_size = self.warp_size_lidar
-        self.voxel_size = self.voxel_size_lidar
-        corr_heatmaps = []
-        corr_gt_masks = []
-        corr_dilate_heatmaps = []
-        corr_pos_nums = []
-        gt_instances_3d = example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d.clone()
-        assert 'correlations' in gt_instances_3d.keys()
-        if self.corr_only_vehicle:
-            vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
-            gt_instances_3d = gt_instances_3d[vehicle_mask]
-        # if self.corr_filter_invalid: # do not modify
-        #     gt_instances_3d = gt_instances_3d[gt_instances_3d.bbox_3d_isvalid] # do not modify
-        bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
-        bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
-        correlations = gt_instances_3d.correlations
-        for j in range(len(co_agents)-1):
-            correlation = correlations[:, j]
-            corr_pos_num = (correlation > 0).float().sum()
-            corr_heatmap = np.zeros((self.grid_size[0], self.grid_size[1]))
-            for index, id in enumerate(gt_instances_3d.track_id):
-                score = correlation[index].item()
-                poly_region = bbox_corners_voxel[index]
-                cv2.fillPoly(corr_heatmap, [poly_region], score)
-            kernel_size = 3
-            # 使用膨胀核对图像进行膨胀，保持原分数位置不变
-            corr_gt_mask = corr_heatmap > 0
-            corr_heatmap = cv2.dilate(corr_heatmap, np.ones((kernel_size, kernel_size), dtype=np.uint8))
-            corr_dilate_heatmaps.append(cv2.dilate(corr_heatmap, np.ones((kernel_size, kernel_size), dtype=np.uint8)))
-            corr_heatmap = cv2.GaussianBlur(corr_heatmap, (kernel_size, kernel_size), 0)
-            corr_heatmaps.append(corr_heatmap)
-            corr_gt_masks.append(corr_gt_mask)
-            corr_pos_nums.append(corr_pos_num)
-        corr_heatmaps = torch.from_numpy(np.stack(corr_heatmaps, axis=0)).float() # c-1, H, W
-        corr_gt_masks = torch.from_numpy(np.stack(corr_gt_masks, axis=0)) # c-1, H, W
-        corr_dilate_heatmaps = torch.from_numpy(np.stack(corr_dilate_heatmaps, axis=0)).float() # c-1, H, W
-        corr_pos_nums = torch.from_numpy(np.stack(corr_pos_nums, axis=0)).float() # c-1, 1
-        input_dict['example_seq'][present_idx][infrastructure_idx]['corr_heatmaps'] = corr_heatmaps
-        input_dict['example_seq'][present_idx][infrastructure_idx]['corr_gt_masks'] = corr_gt_masks
-        input_dict['example_seq'][present_idx][infrastructure_idx]['corr_dilate_heatmaps'] = corr_dilate_heatmaps
-        input_dict['example_seq'][present_idx][infrastructure_idx]['corr_pos_nums'] = corr_pos_nums
+        if self.generate_corr_heatmap:
+            #corr_heatmap_generate
+            self.grid_size = self.grid_size_lidar
+            self.offset_xy = self.offset_xy_lidar
+            self.warp_size = self.warp_size_lidar
+            self.voxel_size = self.voxel_size_lidar
+            corr_heatmaps = []
+            corr_gt_masks = []
+            corr_dilate_heatmaps = []
+            corr_pos_nums = []
+            gt_instances_3d = example_seq[present_idx][infrastructure_idx]['data_samples'].gt_instances_3d.clone()
+            assert 'correlations' in gt_instances_3d.keys()
+            if self.corr_only_vehicle:
+                vehicle_mask = np.isin(gt_instances_3d.labels_3d, self.vehicle_id_list)
+                gt_instances_3d = gt_instances_3d[vehicle_mask]
+            bbox_corners = gt_instances_3d.bboxes_3d.corners[:, [0, 3, 7, 4], :2].numpy() # four corner B, 4, 2
+            bbox_corners_voxel = np.round((bbox_corners - self.offset_xy) / self.voxel_size[:2]).astype(np.int32) # N 4 2 to voxel coor
+            correlations = gt_instances_3d.correlations
+            for j in range(len(co_agents)-1):
+                correlation = correlations[:, j]
+                corr_pos_num = 0
+                corr_heatmap = np.zeros((self.grid_size[0], self.grid_size[1]))
+                for index, id in enumerate(gt_instances_3d.track_id):
+                    score = correlation[index].item()
+                    if self.corr_filter_invalid:
+                        is_valid = gt_instances_3d.bbox_3d_isvalid[index]
+                        if not is_valid:
+                            score = 0
+                    corr_pos_num += 1 if score > 0 else 0
+                    poly_region = bbox_corners_voxel[index]
+                    cv2.fillPoly(corr_heatmap, [poly_region], score)
+                kernel_size = 3
+                # 使用膨胀核对图像进行膨胀，保持原分数位置不变
+                corr_gt_mask = corr_heatmap > 0
+                corr_heatmap = cv2.dilate(corr_heatmap, np.ones((kernel_size, kernel_size), dtype=np.uint8))
+                corr_dilate_heatmaps.append(cv2.dilate(corr_heatmap, np.ones((kernel_size, kernel_size), dtype=np.uint8)))
+                corr_heatmap = cv2.GaussianBlur(corr_heatmap, (kernel_size, kernel_size), 0)
+                corr_heatmaps.append(corr_heatmap)
+                corr_gt_masks.append(corr_gt_mask)
+                corr_pos_nums.append(corr_pos_num)
+            corr_heatmaps = torch.from_numpy(np.stack(corr_heatmaps, axis=0)).float() # c-1, H, W
+            corr_gt_masks = torch.from_numpy(np.stack(corr_gt_masks, axis=0)) # c-1, H, W
+            corr_dilate_heatmaps = torch.from_numpy(np.stack(corr_dilate_heatmaps, axis=0)).float() # c-1, H, W
+            corr_pos_nums = torch.from_numpy(np.stack(corr_pos_nums, axis=0)).float() # c-1, 1
+            input_dict['example_seq'][present_idx][infrastructure_idx]['corr_heatmaps'] = corr_heatmaps
+            input_dict['example_seq'][present_idx][infrastructure_idx]['corr_gt_masks'] = corr_gt_masks
+            input_dict['example_seq'][present_idx][infrastructure_idx]['corr_dilate_heatmaps'] = corr_dilate_heatmaps
+            input_dict['example_seq'][present_idx][infrastructure_idx]['corr_pos_nums'] = corr_pos_nums
         return input_dict
 
 
