@@ -26,8 +26,8 @@ def convert_instance_mask_to_center_and_offset_label(
     future_displacement_label = ignore_index * np.ones((seq_len, 2, h, w)) # 实际有效的是:-1帧，最后一帧没有未来flow
     # x is vertical displacement, y is horizontal displacement
     x, y = np.meshgrid(
-        np.arange(h, dtype=np.float),
-        np.arange(w, dtype=np.float), 
+        np.arange(h, dtype=np.float32),
+        np.arange(w, dtype=np.float32),
         indexing='ij')
 
     # Compute warped instance segmentation

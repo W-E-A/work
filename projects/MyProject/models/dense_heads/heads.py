@@ -372,7 +372,7 @@ class CenterHeadModified(BaseModule):
         heatmaps, anno_boxes, inds, masks = [], [], [], []
 
         task_len = len(self.task_heads)
-        for idx in range(task_len):
+        for idx in range(task_len): # 类别数
             heatmap = gt_bboxes_3d.new_zeros((
                 len(self.class_names[idx]),
                 self.feature_map_size[0].item(),

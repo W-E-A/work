@@ -56,10 +56,10 @@ class IterativeFlow(BaseMotionHead):
         
         # future_distribution_inputs  B len 1+1+2+2 200, 200 or None
 
-        if not self.training:
+        if not self.training: # future_distribution_inputs -> None noise -> None
             res = list()
             if self.n_future > 0:
-                present_state = bevfeats.unsqueeze(dim=1).contiguous()
+                present_state = bevfeats.unsqueeze(dim=1).contiguous() # [1, 1, 384, 200, 200]
                 
                 # sampling probabilistic distribution
                 samples, output_distribution = self.distribution_forward(
@@ -67,7 +67,7 @@ class IterativeFlow(BaseMotionHead):
                 )
 
                 b, _, _, h, w = present_state.shape
-                hidden_state = present_state[:, 0]
+                hidden_state = present_state[:, 0] # [1, 1, 384, 200, 200]
 
                 for sample in samples:
                     res_single = {}
