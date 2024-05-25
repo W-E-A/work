@@ -4,8 +4,8 @@ custom_imports = dict(
 )
 
 # full with multi sweeps
-train_annfile_path = '/mnt/auto-labeling/wyc/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
-val_annfile_path = '/mnt/auto-labeling/wyc/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
+train_annfile_path = '/ai/volume/work/data/deepaccident_ms/deepaccident_infos_train.pkl'
+val_annfile_path = '/ai/volume/work/data/deepaccident_ms/deepaccident_infos_val.pkl'
 
 # full no sweeps
 # train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'

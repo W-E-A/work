@@ -3,19 +3,21 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
-debug = False # CLOUD
+debug = True # CLOUD
 use_multi_sweeps = True
 
 if debug:
     
     if use_multi_sweeps:
         # debug with multi sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+        # train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+        # val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+        train_annfile_path = '/ai/volume/work/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = '/ai/volume/work/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
     else:
         # debug no sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
+        train_annfile_path = 'data/deepaccident_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = 'data/deepaccident_debug/deepaccident_infos_val.pkl'
 
     delete_pointcloud = False
 
@@ -23,12 +25,12 @@ else:
     
     if use_multi_sweeps:
         # full with multi sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
+        train_annfile_path = 'data/deepaccident_ms/deepaccident_infos_train.pkl'
+        val_annfile_path = 'data/deepaccident_ms/deepaccident_infos_val.pkl'
     else:
         # full no sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
+        train_annfile_path = 'deepaccident/deepaccident_infos_train.pkl'
+        val_annfile_path = 'deepaccident/deepaccident_infos_val.pkl'
 
     delete_pointcloud = True
 
