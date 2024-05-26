@@ -165,10 +165,12 @@ class CorrelationModel(MVXTwoStageDetector):
         ego_ids = list(range(co_length))
         self.infrastructure_id = co_agents.index(self.infrastructure_name)
         ego_ids.remove(self.infrastructure_id)
-        temp_dict = {id:i for i, id in enumerate(ego_ids)}
-        ego_ids = random.sample(ego_ids,random.sample([1,2,3,4],1)[0])
-        ego_ids.sort()
-        ego_idxs = [temp_dict[id] for id in ego_ids]
+        if mode == 'loss':
+            temp_dict = {id:i for i, id in enumerate(ego_ids)}
+            # ego_ids = random.sample(ego_ids,random.sample([1,2,3,4],1)[0])
+            ego_ids = random.sample(ego_ids,1)
+            ego_ids.sort()
+            ego_idxs = [temp_dict[id] for id in ego_ids]
         ego_names = [co_agents[id] for id in ego_ids]
         present_seq = example_seq[present_idx]
         
@@ -488,8 +490,8 @@ class CorrelationModel(MVXTwoStageDetector):
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, name in enumerate(ego_names):
                 #     maps = corr_heatmaps[idx][0]
-                #     thres = 0.25
-                #     maps[maps<thres] = 0
+                #     # thres = 0.25
+                #     # maps[maps<thres] = 0
                 #     visualizer.draw_featmap(maps)
                 #     visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_pred.png')
                 #     visualizer.clean()
