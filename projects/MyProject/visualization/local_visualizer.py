@@ -217,25 +217,25 @@ class SimpleLocalVisualizer(Visualizer):
             figure_motion_label.save(f"{save_dir}/{prefix}_motion_label_gt.png")
 
     @master_only
-    def draw_motion_output(self, motion_output, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True):
+    def draw_motion_output(self, motion_output, save_dir: str, fps: int, display_order: str = 'vertical', gif: bool = True, subfix:int = 0):
         video = visualise_output(labels=None, output=motion_output, display_order=display_order)[0]
         
         gifs = []
         for index in range(video.shape[0]):
             image = video[index].transpose((1, 2, 0))
-            gifs.append(Image.fromarray(image))
+            gifs.append(Image.fromarray(image).transpose(Image.FLIP_TOP_BOTTOM))
 
         os.makedirs(save_dir, exist_ok=True)
         if gif:
-            gifs[0].save(f"{save_dir}/motion_output.gif", save_all=True, append_images=gifs[1:], duration=1000 / fps, loop=0)
+            gifs[0].save(f"{save_dir}/motion_output_{subfix}.gif", save_all=True, append_images=gifs[1:], duration=1000 / fps, loop=0)
         else:
             for idx, img in enumerate(gifs):
-                img.save(f"{save_dir}/motion_output_{idx}.png")
+                img.save(f"{save_dir}/motion_output_{subfix}_{idx}.png")
         
         figure_motion_pred = plot_motion_prediction(motion_output)
 
         figure_motion_pred = Image.fromarray(figure_motion_pred)
-        figure_motion_pred.save(f"{save_dir}/motion_output_pred.png")
+        figure_motion_pred.save(f"{save_dir}/motion_output_pred_{subfix}.png")
 
     @master_only
     def just_save(self, save_path: str = "./bev_points.png"):

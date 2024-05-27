@@ -471,9 +471,9 @@ class CorrelationModel(MVXTwoStageDetector):
                 ################################ SHOW MOTION RESULT ################################
                 # if 'motion_feat' in infrastructure_feat_dict:
                 #     # fake visualization
-                #     motion_feat = single_head_feat_dict['motion_feat']
-                #     visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
-                #     visualizer.draw_motion_output(motion_feat, f'./data/vis/motion_output/{save_dir}', 2, display_order='horizon', gif=True)
+                #     for subfix, feat in enumerate(infrastructure_feat_dict['motion_feat']):
+                #         visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                #         visualizer.draw_motion_output(feat, f'./data/vis/motion_output/{save_dir}', 2, display_order='horizon', gif=True, subfix=subfix)
 
                 # import pdb
                 # pdb.set_trace()
@@ -490,7 +490,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, name in enumerate(ego_names):
                 #     maps = corr_heatmaps[idx][0]
-                #     # thres = 0.25
+                #     # thres = 0.35
                 #     # maps[maps<thres] = 0
                 #     visualizer.draw_featmap(maps)
                 #     visualizer.just_save(f'./data/vis/correlation_heatmap/{save_dir}/{name}_correlation_heatmap_pred.png')
