@@ -265,6 +265,48 @@ class EgoModel(MVXTwoStageDetector):
             coop_instances = []
             for instance in ego_coop_instances: # type: ignore
                 coop_instances.append(instance[instance.coop_isvalid])
+            
+            # # 根据inf下的ego相关性提取高相关的egoinstance      
+            # infrastructure_instances = []
+            # for samples in input_samples_inf:
+            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+            #     infrastructure_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+            
+            # corr_dilate_heatmaps = []
+            # inf_dilate_heatmaps = present_seq[self.infrastructure_id]['corr_dilate_heatmaps']
+            # corr_dilate_heatmaps.append(torch.stack(inf_dilate_heatmaps, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous()) # c-1, B, 1, h, w
+
+            # from mmdet3d.models.utils import draw_heatmap_gaussian
+            # corr_track_id_batch = []
+            # corr_score_batch = []
+            # high_corr_score_heatmap_batch = []
+            # for b in range(batch_size):
+
+            #     center_int_list, track_id_list=self.multi_task_head.det_head.find_high_corr_gt_instance(infrastructure_instances[b])  # 提取inf目标的中心坐标和trackid
+                
+            #     corr_score = []
+            #     corr_track_id = []
+            #     high_corr_score_heatmap = torch.zeros((256, 256))
+            #     for idx, center_point in enumerate(center_int_list):
+            #         score = corr_dilate_heatmaps[0][b][0, center_point[1], center_point[0]]
+            #         if float(score.item()) > 0.2:   # 筛选阈值
+            #             draw_heatmap_gaussian(high_corr_score_heatmap,center_point,5)
+            #             corr_score.append(float(score.item()))
+            #             corr_track_id.append(int(track_id_list[idx].item()))
+            #         else:
+            #             draw_heatmap_gaussian(high_corr_score_heatmap,center_point,2)
+            #     corr_track_id_batch.append(corr_track_id)
+            #     corr_score_batch.append(corr_score)
+            #     high_corr_score_heatmap_batch.append(high_corr_score_heatmap)
+            
+            # input_samples_ego = present_seq[self.ego_idx]['data_samples'] # batch
+            # corr_instances = []               
+            # for b, samples in enumerate(input_samples_ego):
+            #     for idx ,track_id_this_sample in enumerate(samples.gt_instances_3d.track_id):
+            #         if track_id_this_sample in corr_track_id_batch[b]:
+            #             samples.gt_instances_3d.bbox_3d_isvalid[idx] = True # 筛选ego中超过相关性阈值的目标
+            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+            #     corr_instances.append(samples.gt_instances_3d[valid_mask])
 
         if mode == 'loss':
             if self.train_mode == 'single':
@@ -359,8 +401,8 @@ class EgoModel(MVXTwoStageDetector):
                 # ################################ SHOW CORRELATION HEATMAP ################################
 
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # corr_mask = gt_corr_heatmaps > self.corr_thresh
-                corr_mask = pred_corr_heatmap > self.corr_thresh
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []

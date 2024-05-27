@@ -3,7 +3,7 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
-debug = True # CLOUD
+debug = False # CLOUD
 use_multi_sweeps = True
 
 if debug:
@@ -429,8 +429,8 @@ corr_model = dict(
             in_channels=sum([128, 128, 128]),
             loss_cfg=dict(
                 type='CorrelationLoss',
-                gamma=2.0,
-                smooth_beta=0.5,
+                # gamma=2.0,
+                # smooth_beta=0.5,
                 pos_weight=1.0,
                 neg_weight=1.0,
             ),
