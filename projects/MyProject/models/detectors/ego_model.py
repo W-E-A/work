@@ -401,8 +401,8 @@ class EgoModel(MVXTwoStageDetector):
                 # ################################ SHOW CORRELATION HEATMAP ################################
 
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                corr_mask = gt_corr_heatmaps > self.corr_thresh
-                # corr_mask = pred_corr_heatmap > self.corr_thresh
+                # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -500,7 +500,7 @@ class EgoModel(MVXTwoStageDetector):
                     present_pose_matrix.append(scene_info[b].pose_matrix[present_idx, self.infrastructure_id, self.ego_id, ...]) # use ego to other1, other2, ... # type: ignore
                 present_pose_matrix = torch.tensor(present_pose_matrix)
                 infrastructure_feature = infrastructure_features[0] # C, H, W
-                infrastructure_feature = corr_mask.float() * infrastructure_feature
+                # infrastructure_feature = corr_mask.float() * infrastructure_feature
                 warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
                 warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
                 #融合
