@@ -42,14 +42,11 @@ agents = [
 lidar_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 mask_range = [-3.0, -1.5, -5.0, 3.0, 1.5, 3.0]
 det_center_range = [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
-motion_range = [-50, -50, -5.0, 50, 50, 3.0]
 voxel_size = [0.1, 0.1, 8.0]
 det_out_factor = 4
 corr_out_factor = 4
-motion_out_factor = 5
 det_voxel_size = [voxel_size[0] * det_out_factor, voxel_size[1] * det_out_factor, voxel_size[2]]
 corr_voxel_size = [voxel_size[0] * corr_out_factor, voxel_size[1] * corr_out_factor, voxel_size[2]]
-motion_voxel_size = [voxel_size[0] * motion_out_factor, voxel_size[1] * motion_out_factor, voxel_size[2]]
 
 det_with_velocity = True
 code_size = 9
@@ -192,8 +189,6 @@ train_scene_pipline = [
     ),
     dict(
         type = 'MakeMotionLabels',
-        pc_range_motion = motion_range,
-        voxel_size_motion = motion_voxel_size,
         pc_range_lidar = lidar_range,
         voxel_size_lidar = corr_voxel_size,
         infrastructure_name = infrastructure_name,
@@ -235,8 +230,6 @@ test_scene_pipline = [
     ),
     dict(
         type = 'MakeMotionLabels',
-        pc_range_motion = motion_range,
-        voxel_size_motion = motion_voxel_size,
         pc_range_lidar = lidar_range,
         voxel_size_lidar = corr_voxel_size,
         infrastructure_name = infrastructure_name,
@@ -442,7 +435,6 @@ model = dict(
             receptive_field=present_idx+1,
             n_future=seq_length-present_idx-1,
             grid_conf = [lidar_range, det_voxel_size],
-            new_grid_conf = [motion_range, motion_voxel_size],
             using_spatial_prob=True,
             using_focal_loss=True,
             n_gru_blocks=1,
