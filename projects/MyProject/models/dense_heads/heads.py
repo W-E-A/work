@@ -469,6 +469,33 @@ class CenterHeadModified(BaseModule):
             masks.append(mask)
             inds.append(ind)
         return heatmaps, anno_boxes, inds, masks # type: ignore
+    
+    def find_high_corr_gt_instance(self, gt_instances_3d: InstanceData):
+        gt_bboxes_3d = gt_instances_3d.bboxes_3d # type: ignore
+        track_id = gt_instances_3d.track_id
+        track_id = torch.tensor(track_id, device='cuda')
+        gt_bboxes_3d = torch.cat( # get gravity center box
+        (gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]),dim=1).to('cuda')
+        center_int_list = []
+        for idx in range(gt_bboxes_3d.shape[0]):
+            length = gt_bboxes_3d[idx][3]
+            width = gt_bboxes_3d[idx][4]
+            length = length / self.voxel_size[0] / self.out_size_factor
+            width = width / self.voxel_size[1] / self.out_size_factor
+            if width > 0 and length > 0:
+                x, y, z = gt_bboxes_3d[idx][0], gt_bboxes_3d[idx][1], gt_bboxes_3d[idx][2]
+                coor_x = (x - self.pc_range[0]) / self.voxel_size[0] / self.out_size_factor
+                coor_y = (y - self.pc_range[1]) / self.voxel_size[1] / self.out_size_factor
+                center = torch.tensor([coor_x, coor_y],
+                                dtype=torch.float32,
+                                device="cuda")
+                center_int = center.to(torch.int32)
+                if not (0 <= center_int[0] < 256
+                    and 0 <= center_int[1] < 256):
+                    print('out of range')
+                    continue
+                center_int_list.append(center_int)
+        return center_int_list , track_id
 
     def loss_by_feat(self,
                      preds_dicts: Tuple[List[dict]],
@@ -751,8 +778,8 @@ class CorrGenerateHead(BaseModule):
         in_channels: Union[List[int], int] = [128],
         loss_cfg: Optional[dict] = dict(
             type='CorrelationLoss',
-            gamma = 2.0,
-            smooth_beta = 0.5,
+            focal_gamma=2.0,
+            gaussian_gamma=1.0,
             pos_weight = 1.0,
             neg_weight = 1.0,
         ),

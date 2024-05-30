@@ -49,7 +49,6 @@ class IterativeFlow(BaseMotionHead):
         # import pdb;pdb.set_trace()
         bevfeats = bevfeats[0] # b, 384, 256, 256 输入应该是结合了历史bev信息也就是temporal模块的bev特征，或者是单帧的BEV特征
         bevfeats = self.downsample_conv(bevfeats)
-        bevfeats = self.cropper(bevfeats) # b, 384, 200, 200
 
         if self.training:
             assert future_distribution_inputs is not None

@@ -38,29 +38,10 @@ class V2XTransformerFusion(BaseModule):
 
     def forward(self, ego_feats: Tensor, agent_feats: Tensor, corr_mask: Tensor):
         #使用mask
-        # B, H, W, C = agent_feats.shape
-        # inter_agent_feats = agent_feats[corr_mask]  # B M,C
-        # inter_ego_feats = ego_feats[corr_mask]  # B M,C
-        # mask_position = torch.nonzero(corr_mask)  # B M,2
-        # import pdb;pdb.set_trace()
-        # B, M, C = inter_agent_feats.shape
-        
-        # inter_ego_feats = inter_ego_feats.view(B*M, 1, C) # N E C
-        # inter_agent_feats = inter_agent_feats.view(B*M, 1, C) # N A C
-        # all_feats = torch.cat([inter_ego_feats, inter_agent_feats], dim=1) # N A+E C
-        # sqrt_dim = math.sqrt(C)
-        # score = torch.bmm(all_feats, all_feats.transpose(1, 2)) / sqrt_dim
-        # attn = F.softmax(score, dim=-1)
-        # result = torch.bmm(attn, all_feats) #  N A+E C
-        # result = result[:,0:1,:].view(B*M, C)
-        # linear_index = mask_position[:, 0] * W + mask_position[:, 1]
-        # ego_feats.view(-1, C)[linear_index] = result
-        # return ego_feats.view(B,H,W,C)
-
         B, C, H, W = ego_feats.shape
-        ego_feats = ego_feats.permute(0, 2, 3, 1).contiguous().view(B*H*W, 1, C) # N E C
+        ego_feats_fusion = ego_feats.permute(0, 2, 3, 1).contiguous().view(B*H*W, 1, C) # N E C
         agent_feats = agent_feats.permute(0, 2, 3, 1).contiguous().view(B*H*W, 1, C) # N A C
-        all_feats = torch.cat([ego_feats, agent_feats], dim=1) # N A+E C
+        all_feats = torch.cat([ego_feats_fusion, agent_feats], dim=1) # N A+E C
 
         #ScaledDotProduct 29.7
         sqrt_dim = math.sqrt(C)
@@ -68,7 +49,21 @@ class V2XTransformerFusion(BaseModule):
         attn = F.softmax(score, dim=-1)
         result = torch.bmm(attn, all_feats) #  N A+E C
         result = result[:,0:1,:].view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+        result = result*corr_mask.float() + ego_feats*(~corr_mask).float()
         return result
+
+        # B, C, H, W = ego_feats.shape
+        # ego_feats = ego_feats.permute(0, 2, 3, 1).contiguous().view(B*H*W, 1, C) # N E C
+        # agent_feats = agent_feats.permute(0, 2, 3, 1).contiguous().view(B*H*W, 1, C) # N A C
+        # all_feats = torch.cat([ego_feats, agent_feats], dim=1) # N A+E C
+
+        # #ScaledDotProduct 29.7
+        # sqrt_dim = math.sqrt(C)
+        # score = torch.bmm(all_feats, all_feats.transpose(1, 2)) / sqrt_dim
+        # attn = F.softmax(score, dim=-1)
+        # result = torch.bmm(attn, all_feats) #  N A+E C
+        # result = result[:,0:1,:].view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+        # return result
 
         #ScaledDotProductSum 27
         # sqrt_dim = math.sqrt(C)

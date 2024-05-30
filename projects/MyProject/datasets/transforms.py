@@ -690,8 +690,6 @@ class CorrelationFilter(BaseTransform):
 @TRANSFORMS.register_module()
 class MakeMotionLabels(BaseTransform):
     def __init__(self,
-        pc_range_motion,
-        voxel_size_motion,
         pc_range_lidar,
         voxel_size_lidar,
         infrastructure_name: str = 'infrastructure',
@@ -707,33 +705,19 @@ class MakeMotionLabels(BaseTransform):
         ignore_index:int = 255,
         ) -> None:
 
-        self.pc_range_motion = pc_range_motion
-        self.voxel_size_motion = voxel_size_motion
-        self.voxel_size_motion = np.array(self.voxel_size_motion).astype(np.float32)
-        self.grid_size_motion = np.array([
-            np.round((self.pc_range_motion[4] - self.pc_range_motion[1]) / self.voxel_size_motion[1]), # H
-            np.round((self.pc_range_motion[3] - self.pc_range_motion[0]) / self.voxel_size_motion[0]), # W
-            np.round((self.pc_range_motion[5] - self.pc_range_motion[2]) / self.voxel_size_motion[2]), # D
+        self.pc_range = pc_range_lidar
+        self.voxel_size = voxel_size_lidar
+        self.voxel_size = np.array(self.voxel_size).astype(np.float32)
+        self.grid_size = np.array([
+            np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
+            np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
+            np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
         ]).astype(np.int32)
-        self.offset_xy_motion = np.array([
-            self.pc_range_motion[0] + self.voxel_size_motion[0] * 0.5,
-            self.pc_range_motion[1] + self.voxel_size_motion[1] * 0.5
+        self.offset_xy = np.array([
+            self.pc_range[0] + self.voxel_size[0] * 0.5,
+            self.pc_range[1] + self.voxel_size[1] * 0.5
         ]).astype(np.float32)
-        self.warp_size_motion = (0.5 * (self.pc_range_motion[3] - self.pc_range_motion[0]), 0.5 * (self.pc_range_motion[4] - self.pc_range_motion[1]))
-
-        self.pc_range_lidar = pc_range_lidar
-        self.voxel_size_lidar = voxel_size_lidar
-        self.voxel_size_lidar = np.array(self.voxel_size_lidar).astype(np.float32)
-        self.grid_size_lidar = np.array([
-            np.round((self.pc_range_lidar[4] - self.pc_range_lidar[1]) / self.voxel_size_lidar[1]), # H
-            np.round((self.pc_range_lidar[3] - self.pc_range_lidar[0]) / self.voxel_size_lidar[0]), # W
-            np.round((self.pc_range_lidar[5] - self.pc_range_lidar[2]) / self.voxel_size_lidar[2]), # D
-        ]).astype(np.int32)
-        self.offset_xy_lidar = np.array([
-            self.pc_range_lidar[0] + self.voxel_size_lidar[0] * 0.5,
-            self.pc_range_lidar[1] + self.voxel_size_lidar[1] * 0.5
-        ]).astype(np.float32)
-        self.warp_size_lidar = (0.5 * (self.pc_range_lidar[3] - self.pc_range_lidar[0]), 0.5 * (self.pc_range_lidar[4] - self.pc_range_lidar[1]))
+        self.warp_size = (0.5 * (self.pc_range[3] - self.pc_range[0]), 0.5 * (self.pc_range[4] - self.pc_range[1]))
 
         self.mode = mode
         assert self.mode in ('normal', 'ego', 'inf')
@@ -775,16 +759,8 @@ class MakeMotionLabels(BaseTransform):
         for j, agent in enumerate(co_agents):
             if agent == self.infrastructure_name:
                 self.mode = 'inf'
-                self.grid_size = self.grid_size_motion
-                self.offset_xy = self.offset_xy_motion
-                self.warp_size = self.warp_size_motion
-                self.voxel_size = self.voxel_size_motion
             else:
                 self.mode = 'ego'
-                self.grid_size = self.grid_size_lidar
-                self.offset_xy = self.offset_xy_lidar
-                self.warp_size = self.warp_size_lidar
-                self.voxel_size = self.voxel_size_lidar
 
             track_map = {}
             segmentations = []
@@ -860,10 +836,6 @@ class MakeMotionLabels(BaseTransform):
 
         if self.generate_corr_heatmap:
             #corr_heatmap_generate
-            self.grid_size = self.grid_size_lidar
-            self.offset_xy = self.offset_xy_lidar
-            self.warp_size = self.warp_size_lidar
-            self.voxel_size = self.voxel_size_lidar
             corr_heatmaps = []
             corr_gt_masks = []
             corr_dilate_heatmaps = []
