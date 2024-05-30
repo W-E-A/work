@@ -416,6 +416,30 @@ class EgoModel(MVXTwoStageDetector):
                 # infrastructure_feature = corr_mask.float() * infrastructure_feature
                 warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
                 warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
+
+                # 通信量计算
+                def calculate_communication_volume(selection_matrix):
+                    """
+                    计算通信量。
+
+                    参数:
+                    selection_matrix (torch.Tensor): 形状为 (Batch_size, channels, H, W) 的二进制选择矩阵
+
+                    返回:
+                    list[float]: 长为B的list, 每个batch的log2标度的通信量
+                    """
+                    communication_volume = []
+                    for b in range(selection_matrix.shape[0]):
+                        # 计算 L0 范数（非零元素的数量）
+                        non_zero_elements = torch.sum(selection_matrix[b] != 0).item()
+                        
+                        # 计算通信量
+                        communication_volume.append(float(torch.log2(torch.tensor(non_zero_elements * 4.0))))
+                    
+                    return communication_volume
+                
+                communication_volume_batch = calculate_communication_volume(warp_corr_mask)
+                
                 #融合
                 ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
 
