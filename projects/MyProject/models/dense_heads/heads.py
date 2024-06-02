@@ -1,19 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List, Union, Optional, Sequence, Tuple, Dict
-from mmdet3d.registry import MODELS
-from mmengine.structures import InstanceData
 import torch
 from torch import Tensor, nn
+import numpy as np
 import copy
 from mmcv.cnn import ConvModule
 from mmdet.models.utils import multi_apply
-from mmengine.model import BaseModule
+from mmengine.model import BaseModule, Sequential
 from mmengine.structures import InstanceData
 from mmdet3d.models.utils import clip_sigmoid, draw_heatmap_gaussian, gaussian_radius
 from mmdet3d.registry import MODELS, TASK_UTILS
 from mmdet3d.structures import Det3DDataSample, xywhr2xyxyr
 from mmdet3d.models.dense_heads.centerpoint_head import circle_nms, nms_bev
-import numpy as np
 from ...utils import FeatureWarper
 from ..loss_utils import CorrelationLoss
 
@@ -100,7 +98,7 @@ class MTHead(BaseModule):
             multi_tasks_multi_feats: Tuple[List[Tensor]] = self.motion_head(feats, **motion_forward_kwargs) # FIXME 6000MiB
             return_dict['motion_feat'] = multi_tasks_multi_feats
         if self.corr_head:
-            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.corr_head(feats, **corr_forward_kwargs) # FIXME 5000MiB
+            multi_tasks_multi_feats: Tuple[List[Tensor]] = self.corr_head(feats, motion_inputs = return_dict['motion_feat'], **corr_forward_kwargs) # FIXME 5000MiB
             return_dict['corr_feat'] = multi_tasks_multi_feats
 
         return return_dict
@@ -773,9 +771,10 @@ class CorrGenerateHead(BaseModule):
         self,
         pc_range,
         voxel_size,
-        n_future_and_present: int = 0,
+        n_present_and_future: int = 0,
         label_size: int = 6,
-        in_channels: Union[List[int], int] = [128],
+        in_channels: int = 256,
+        feat_channels: int = 384,
         loss_cfg: Optional[dict] = dict(
             type='CorrelationLoss',
             focal_gamma=2.0,
@@ -808,15 +807,79 @@ class CorrGenerateHead(BaseModule):
             np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
         ]).astype(np.int32)
         self.warper = FeatureWarper(self.pc_range)
-        self.add_channels = n_future_and_present * label_size
+        self.add_channels = n_present_and_future * label_size
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.in_channels = in_channels
+        self.feat_channels = feat_channels
         self.heatmap_criterion = MODELS.build(loss_cfg)
+
+        self.feature_convs = Sequential(
+            ConvModule(
+                self.feat_channels,
+                self.in_channels,
+                kernel_size=3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                bias=bias
+            ),
+            ConvModule(
+                self.in_channels,
+                self.in_channels,
+                kernel_size=3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                bias=bias
+            ),
+        )
+
+        self.motion_convs = Sequential(
+            ConvModule(
+                self.add_channels,
+                n_present_and_future,
+                kernel_size=3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                bias=bias
+            ),
+            ConvModule(
+                n_present_and_future,
+                n_present_and_future,
+                kernel_size=3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                bias=bias
+            ),
+        )
+
+        self.ego_convs = Sequential(
+            ConvModule(
+                self.add_channels,
+                n_present_and_future,
+                kernel_size=3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                bias=bias
+            ),
+            ConvModule(
+                n_present_and_future,
+                1,
+                kernel_size=3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                bias=bias
+            ),
+        )
 
         # a shared convolution
         self.shared_conv = ConvModule(
-            in_channels + self.add_channels, # type: ignore
+            self.in_channels + n_present_and_future + 1,
             share_conv_channel,
             kernel_size=3,
             padding=1,
@@ -834,17 +897,27 @@ class CorrGenerateHead(BaseModule):
             self.gaussian_overlap = self.train_cfg['corr_gaussian_overlap']
             self.min_radius = self.train_cfg['corr_min_radius']
 
-    def forward(self, feats: Union[List[Tensor], Tensor], ego_motion_inputs=None):
+    def forward(self, feats: Union[List[Tensor], Tensor], motion_inputs=None, ego_motion_inputs=None):
+        # motion_inputs ['segmentation', 'instance_flow', 'instance_center', 'instance_offset'] 2 2 1 2
+        feats = self.feature_convs(feats[0]) # B, in_channels, H, W
+        if isinstance(motion_inputs, Sequence):
+            motion_inputs = motion_inputs[-1] # 从mu采样的未来轨迹
+        motion = []
+        motion.append(torch.argmax(motion_inputs['segmentation'].detach(), dim=2, keepdims=True)) # B, len, 1, H, W
+        motion.append(motion_inputs['instance_flow'].detach()) # B, len, 1, H, W
+        motion.append(motion_inputs['instance_center'].detach()) # B, len, 2, H, W
+        motion.append(motion_inputs['instance_offset'].detach()) # B, len, 2, H, W
+        motion = torch.cat(motion, dim=2)
+        b, _, _, h, w = motion.shape
+        motion = self.motion_convs(motion.view(b, -1, h, w)) # B, n_f_a_p, H, W
+
         all_ret_list = []
-        if not ego_motion_inputs:
-            all_ret_list.append([self.corr_head(self.shared_conv(feats[0]))])
-            return all_ret_list
-        elif not isinstance(ego_motion_inputs, Sequence):
+        if not isinstance(ego_motion_inputs, Sequence):
             ego_motion_inputs = [ego_motion_inputs]
-        for input in ego_motion_inputs:
-            b, _, _, h, w = input.shape
-            input = input.view(b, -1, h, w)
-            all_ret_list.append([self.corr_head(self.shared_conv(torch.cat([feats[0], input], dim=1)))])
+        for ego in ego_motion_inputs:
+            b, _, _, h, w = ego.shape
+            ego = self.ego_convs(ego.view(b, -1, h, w)) # B, 1, H, W
+            all_ret_list.append([self.corr_head(self.shared_conv(torch.cat([feats, motion, ego], dim=1)))])
         return all_ret_list
 
     def loss_by_feat(self,
@@ -889,7 +962,7 @@ class CorrGenerateHead(BaseModule):
     def predict_by_feat(self, preds_dicts: Tuple[List[dict]]) -> List[Tensor]:
         heatmaps = []
         assert isinstance(preds_dicts, Sequence) and isinstance(preds_dicts[0], Sequence) and len(preds_dicts[0]) == 1
-        for task_id, preds_dict in enumerate(preds_dicts):
+        for _, preds_dict in enumerate(preds_dicts):
             pred_result = preds_dict[0]
             heatmaps.append(pred_result['heatmap'].sigmoid()) # B c H W
         return heatmaps

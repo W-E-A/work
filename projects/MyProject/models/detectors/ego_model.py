@@ -26,7 +26,7 @@ class EgoModel(MVXTwoStageDetector):
                  pts_fusion_layer: Optional[dict] = None,
                  pts_backbone: Optional[dict] = None,
                  pts_neck: Optional[dict] = None,
-                #  temporal_backbone: Optional[dict] = None,
+                 temporal_neck: Optional[dict] = None,
                  multi_task_head: Optional[dict] = None,
                 #  train_comm_expand_layer: Optional[dict] = None,
                 #  test_comm_expand_layer: Optional[dict] = None,
@@ -52,6 +52,13 @@ class EgoModel(MVXTwoStageDetector):
         self.pts_fusion_cfg = pts_fusion_cfg
         self.co_cfg = co_cfg
         
+        if temporal_neck:
+            self.temporal_neck_cfg = temporal_neck
+            self.temporal_neck = MODELS.build(temporal_neck)
+            self.input_mode = 'temporal'
+        else:
+            self.input_mode = 'single_frame'
+
         if multi_task_head:
             multi_task_head.update(train_cfg = pts_train_cfg)
             multi_task_head.update(test_cfg = pts_test_cfg)
@@ -101,7 +108,7 @@ class EgoModel(MVXTwoStageDetector):
                                                 voxel_dict['num_points'], # [n*bs, ] realpoints
                                                 voxel_dict['coors'], # [n*bs, 1 + 3] batch z y x
                                                 img_feats,
-                                                batch_input_metas) # FIXME 400MiB
+                                                batch_input_metas=batch_input_metas) # FIXME 400MiB
         if return_voxel_features:
             return_dict['voxel_features'] = voxel_features
         if extract_level == 1:
@@ -142,7 +149,7 @@ class EgoModel(MVXTwoStageDetector):
 
     def extract_feat(self,
                      batch_inputs_dict: dict,
-                     batch_input_metas: List[dict],
+                     batch_input_metas: Optional[List[dict]] = None,
                      **kwargs) -> Union[tuple, dict]:
         voxel_dict = batch_inputs_dict.get('voxels', None)
         points = batch_inputs_dict.get('points', None)
@@ -181,19 +188,41 @@ class EgoModel(MVXTwoStageDetector):
 
         if self.train_mode == 'single':
             # ego的所有输入
-            input_dict_ego = present_seq[self.ego_id]['inputs'] # voxel batch
-            input_samples_ego = present_seq[self.ego_id]['data_samples'] # batch
-            ego_metas = [sample.metainfo for sample in input_samples_ego] # batch
-            pts_feat_dict_ego = self.extract_feat(
-                input_dict_ego,
-                ego_metas,
-                extract_level = 4,
-                return_voxel_features = False,
-                return_middle_features = False,
-                return_backbone_features = False,
-                return_neck_features = True) # FIXME 4 times
-            ego_features = pts_feat_dict_ego['neck_features'] # B C H W
-
+            if self.input_mode == 'temporal':
+                ego_seq_middle_features = [] # seq batch c h w
+                input_samples_ego = present_seq[self.ego_id]['data_samples'] # batch
+                ego_metas = [sample.metainfo for sample in input_samples_ego] # batch
+                for i in range(present_idx+1):
+                    input_dict = example_seq[i][self.ego_id]['inputs']
+                    pts_feat_dict = self.extract_feat(
+                                    input_dict,
+                                    extract_level = 2,
+                                    return_voxel_features = False,
+                                    return_middle_features = True,
+                                    return_backbone_features = False,
+                                    return_neck_features = False)
+                    ego_seq_middle_features.append(pts_feat_dict['middle_features'])
+                ego_seq_middle_features = torch.cat(ego_seq_middle_features, dim=0) # seq*batch c h w
+                ego_seq_neck_features = self.pts_neck(self.pts_backbone(ego_seq_middle_features))[0] # seq*batch c h w
+                _, c, h, w = ego_seq_neck_features.shape
+                ego_seq_neck_features = ego_seq_neck_features.view(present_idx+1, -1, c, h, w).permute(1, 0, 2, 3, 4).contiguous() # batch seq c h w
+                if self.temporal_neck:
+                    if self.temporal_neck_cfg['type'] == 'Temporal3DConvModel':
+                        ego_features = self.temporal_neck(ego_seq_neck_features) # batch c h w
+            else:#'single_frame'
+                input_dict_ego = present_seq[self.ego_id]['inputs'] # voxel batch
+                input_samples_ego = present_seq[self.ego_id]['data_samples'] # batch
+                ego_metas = [sample.metainfo for sample in input_samples_ego] # batch
+                pts_feat_dict_ego = self.extract_feat(
+                    input_dict_ego,
+                    ego_metas,
+                    extract_level = 4,
+                    return_voxel_features = False,
+                    return_middle_features = False,
+                    return_backbone_features = False,
+                    return_neck_features = True) # FIXME 4 times
+                ego_features = pts_feat_dict_ego['neck_features'] # B C H W
+            
             # choose gt here
             # visible targets only
             ego_instances = []
@@ -261,33 +290,74 @@ class EgoModel(MVXTwoStageDetector):
                 corr_instances.append(samples.gt_instances_3d[valid_mask])
 
         else:
-            # ego的所有输入
-            input_dict_ego = present_seq[self.ego_id]['inputs'] # voxel batch
-            input_samples_ego = present_seq[self.ego_id]['data_samples'] # batch
-            ego_metas = [sample.metainfo for sample in input_samples_ego] # batch
-            pts_feat_dict_ego = self.extract_feat(
-                input_dict_ego,
-                ego_metas,
-                extract_level = 4,
-                return_voxel_features = False,
-                return_middle_features = False,
-                return_backbone_features = False,
-                return_neck_features = True) # FIXME 4 times
-            ego_features = pts_feat_dict_ego['neck_features'] # B C H W
+            if self.input_mode == 'temporal':
+                #ego
+                ego_seq_middle_features = [] # seq batch c h w
+                input_samples_ego = present_seq[self.ego_id]['data_samples'] # batch
+                ego_metas = [sample.metainfo for sample in input_samples_ego] # batch
+                for i in range(present_idx+1):
+                    input_dict = example_seq[i][self.ego_id]['inputs']
+                    pts_feat_dict_ego = self.extract_feat(
+                                    input_dict,
+                                    extract_level = 2,
+                                    return_voxel_features = False,
+                                    return_middle_features = True,
+                                    return_backbone_features = False,
+                                    return_neck_features = False)
+                    ego_seq_middle_features.append(pts_feat_dict_ego['middle_features'])
+                ego_seq_middle_features = torch.cat(ego_seq_middle_features, dim=0) # seq*batch c h w
+                ego_seq_neck_features = self.pts_neck(self.pts_backbone(ego_seq_middle_features))[0] # seq*batch c h w
+                _, c, h, w = ego_seq_neck_features.shape
+                ego_seq_neck_features = ego_seq_neck_features.view(present_idx+1, -1, c, h, w).permute(1, 0, 2, 3, 4).contiguous() # batch seq c h w
+                ego_features = [self.temporal_neck(ego_seq_neck_features)] # batch c h w
+                #inf
+                inf_seq_middle_features = [] # seq batch c h w
+                input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
+                infrastructure_metas = [sample.metainfo for sample in input_samples_inf] # batch
+                for i in range(present_idx+1):
+                    input_dict = example_seq[i][self.infrastructure_id]['inputs']
+                    pts_feat_dict_inf = self.corr_model.extract_feat(
+                                    input_dict,
+                                    extract_level = 2,
+                                    return_voxel_features = False,
+                                    return_middle_features = True,
+                                    return_backbone_features = False,
+                                    return_neck_features = False)
+                    inf_seq_middle_features.append(pts_feat_dict_inf['middle_features'])
+                inf_seq_middle_features = torch.cat(inf_seq_middle_features, dim=0) # seq*batch c h w
+                inf_seq_neck_features = self.corr_model.pts_neck(self.corr_model.pts_backbone(inf_seq_middle_features))[0] # seq*batch c h w
+                _, c, h, w = inf_seq_neck_features.shape
+                inf_seq_neck_features = inf_seq_neck_features.view(present_idx+1, -1, c, h, w).permute(1, 0, 2, 3, 4).contiguous() # batch seq c h w
+                infrastructure_features = [self.corr_model.temporal_neck(inf_seq_neck_features)] # batch c h w
 
-            # infrastructure的所有输入
-            input_dict_inf = present_seq[self.infrastructure_id]['inputs'] # voxel batch
-            input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
-            infrastructure_metas = [sample.metainfo for sample in input_samples_inf] # batch
-            pts_feat_dict_inf = self.corr_model.extract_feat(
-                input_dict_inf,
-                infrastructure_metas,
-                extract_level = 4,
-                return_voxel_features = False,
-                return_middle_features = False,
-                return_backbone_features = False,
-                return_neck_features = True) # FIXME 4 times
-            infrastructure_features = pts_feat_dict_inf['neck_features'] # B C H W
+            else:
+                # ego的所有输入
+                input_dict_ego = present_seq[self.ego_id]['inputs'] # voxel batch
+                input_samples_ego = present_seq[self.ego_id]['data_samples'] # batch
+                ego_metas = [sample.metainfo for sample in input_samples_ego] # batch
+                pts_feat_dict_ego = self.extract_feat(
+                    input_dict_ego,
+                    ego_metas,
+                    extract_level = 4,
+                    return_voxel_features = False,
+                    return_middle_features = False,
+                    return_backbone_features = False,
+                    return_neck_features = True) # FIXME 4 times
+                ego_features = pts_feat_dict_ego['neck_features'] # B C H W
+
+                # infrastructure的所有输入
+                input_dict_inf = present_seq[self.infrastructure_id]['inputs'] # voxel batch
+                input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
+                infrastructure_metas = [sample.metainfo for sample in input_samples_inf] # batch
+                pts_feat_dict_inf = self.corr_model.extract_feat(
+                    input_dict_inf,
+                    infrastructure_metas,
+                    extract_level = 4,
+                    return_voxel_features = False,
+                    return_middle_features = False,
+                    return_backbone_features = False,
+                    return_neck_features = True) # FIXME 4 times
+                infrastructure_features = pts_feat_dict_inf['neck_features'] # B C H W
 
             # gt
             # coop targets
@@ -438,8 +508,8 @@ class EgoModel(MVXTwoStageDetector):
                 # ################################ SHOW CORRELATION HEATMAP ################################
 
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # corr_mask = gt_corr_heatmaps > self.corr_thresh
-                corr_mask = pred_corr_heatmap > self.corr_thresh
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -527,8 +597,8 @@ class EgoModel(MVXTwoStageDetector):
                     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # corr_mask = gt_corr_heatmaps > self.corr_thresh
-                corr_mask = pred_corr_heatmap > self.corr_thresh
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = pred_corr_heatmap > self.corr_thresh
 
 
                 #对路端特帧进行位姿变换

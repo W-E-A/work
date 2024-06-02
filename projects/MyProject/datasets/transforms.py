@@ -373,6 +373,7 @@ class GatherV2XPoseInfo(BaseTransform):
         example_seq = input_dict['example_seq']
         present_idx = input_dict['present_idx']
         future_seq = range(seq_length)[present_idx:] # only future motion
+        history_seq = range(seq_length)[:present_idx+1] # only history motion
 
         seq_pose_matrix = []
         seq_loc_matrix = []
@@ -395,16 +396,23 @@ class GatherV2XPoseInfo(BaseTransform):
 
         future_motion_matrix = []
         future_motion_rela_matrix = []
+        history_motion_rela_matrix = []
         for j in range(co_length):
-            future_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in future_seq]
+            future_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['lidar2ego']) @ np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in future_seq]
+            history_motion_list = [np.array(example_seq[i][j]['data_samples'].metainfo['lidar2ego']) @ np.array(example_seq[i][j]['data_samples'].metainfo['ego2global'], dtype=np.float32) for i in history_seq]
+            temp = list(map(calc_relative_pose, history_motion_list[:-1], history_motion_list[1:]))
+            temp.append(np.eye(4, dtype=np.float32))
+            history_motion_rela_matrix.append(np.stack(temp, axis=0))
             temp = [np.eye(4, dtype=np.float32)]
             temp.extend(list(map(calc_relative_pose, future_motion_list[1:], future_motion_list[:-1])))
             future_motion_rela_matrix.append(np.stack(temp, axis=0))
             future_motion_matrix.append(np.stack(calc_relative_pose(future_motion_list[0], future_motion_list), axis=0)) # type: ignore
         future_motion_matrix = np.stack(future_motion_matrix, axis=0) # NOTE starts with identity
         future_motion_rela_matrix = np.stack(future_motion_rela_matrix, axis=0) # NOTE starts with identity
+        history_motion_rela_matrix = np.stack(history_motion_rela_matrix, axis=0) # NOTE ends with identity
         input_dict['future_motion_matrix'] = future_motion_matrix # co seq 4 4 
         input_dict['future_motion_rela_matrix'] = future_motion_rela_matrix # co seq 4 4 
+        input_dict['history_motion_rela_matrix'] = history_motion_rela_matrix # co seq 4 4 
         return input_dict
 
 
@@ -690,8 +698,6 @@ class CorrelationFilter(BaseTransform):
 @TRANSFORMS.register_module()
 class MakeMotionLabels(BaseTransform):
     def __init__(self,
-        pc_range_motion,
-        voxel_size_motion,
         pc_range_lidar,
         voxel_size_lidar,
         infrastructure_name: str = 'infrastructure',
@@ -707,33 +713,19 @@ class MakeMotionLabels(BaseTransform):
         ignore_index:int = 255,
         ) -> None:
 
-        self.pc_range_motion = pc_range_motion
-        self.voxel_size_motion = voxel_size_motion
-        self.voxel_size_motion = np.array(self.voxel_size_motion).astype(np.float32)
-        self.grid_size_motion = np.array([
-            np.round((self.pc_range_motion[4] - self.pc_range_motion[1]) / self.voxel_size_motion[1]), # H
-            np.round((self.pc_range_motion[3] - self.pc_range_motion[0]) / self.voxel_size_motion[0]), # W
-            np.round((self.pc_range_motion[5] - self.pc_range_motion[2]) / self.voxel_size_motion[2]), # D
+        self.pc_range = pc_range_lidar
+        self.voxel_size = voxel_size_lidar
+        self.voxel_size = np.array(self.voxel_size).astype(np.float32)
+        self.grid_size = np.array([
+            np.round((self.pc_range[4] - self.pc_range[1]) / self.voxel_size[1]), # H
+            np.round((self.pc_range[3] - self.pc_range[0]) / self.voxel_size[0]), # W
+            np.round((self.pc_range[5] - self.pc_range[2]) / self.voxel_size[2]), # D
         ]).astype(np.int32)
-        self.offset_xy_motion = np.array([
-            self.pc_range_motion[0] + self.voxel_size_motion[0] * 0.5,
-            self.pc_range_motion[1] + self.voxel_size_motion[1] * 0.5
+        self.offset_xy = np.array([
+            self.pc_range[0] + self.voxel_size[0] * 0.5,
+            self.pc_range[1] + self.voxel_size[1] * 0.5
         ]).astype(np.float32)
-        self.warp_size_motion = (0.5 * (self.pc_range_motion[3] - self.pc_range_motion[0]), 0.5 * (self.pc_range_motion[4] - self.pc_range_motion[1]))
-
-        self.pc_range_lidar = pc_range_lidar
-        self.voxel_size_lidar = voxel_size_lidar
-        self.voxel_size_lidar = np.array(self.voxel_size_lidar).astype(np.float32)
-        self.grid_size_lidar = np.array([
-            np.round((self.pc_range_lidar[4] - self.pc_range_lidar[1]) / self.voxel_size_lidar[1]), # H
-            np.round((self.pc_range_lidar[3] - self.pc_range_lidar[0]) / self.voxel_size_lidar[0]), # W
-            np.round((self.pc_range_lidar[5] - self.pc_range_lidar[2]) / self.voxel_size_lidar[2]), # D
-        ]).astype(np.int32)
-        self.offset_xy_lidar = np.array([
-            self.pc_range_lidar[0] + self.voxel_size_lidar[0] * 0.5,
-            self.pc_range_lidar[1] + self.voxel_size_lidar[1] * 0.5
-        ]).astype(np.float32)
-        self.warp_size_lidar = (0.5 * (self.pc_range_lidar[3] - self.pc_range_lidar[0]), 0.5 * (self.pc_range_lidar[4] - self.pc_range_lidar[1]))
+        self.warp_size = (0.5 * (self.pc_range[3] - self.pc_range[0]), 0.5 * (self.pc_range[4] - self.pc_range[1]))
 
         self.mode = mode
         assert self.mode in ('normal', 'ego', 'inf')
@@ -775,16 +767,8 @@ class MakeMotionLabels(BaseTransform):
         for j, agent in enumerate(co_agents):
             if agent == self.infrastructure_name:
                 self.mode = 'inf'
-                self.grid_size = self.grid_size_motion
-                self.offset_xy = self.offset_xy_motion
-                self.warp_size = self.warp_size_motion
-                self.voxel_size = self.voxel_size_motion
             else:
                 self.mode = 'ego'
-                self.grid_size = self.grid_size_lidar
-                self.offset_xy = self.offset_xy_lidar
-                self.warp_size = self.warp_size_lidar
-                self.voxel_size = self.voxel_size_lidar
 
             track_map = {}
             segmentations = []
@@ -860,10 +844,6 @@ class MakeMotionLabels(BaseTransform):
 
         if self.generate_corr_heatmap:
             #corr_heatmap_generate
-            self.grid_size = self.grid_size_lidar
-            self.offset_xy = self.offset_xy_lidar
-            self.warp_size = self.warp_size_lidar
-            self.voxel_size = self.voxel_size_lidar
             corr_heatmaps = []
             corr_gt_masks = []
             corr_dilate_heatmaps = []
@@ -989,7 +969,7 @@ class PackSceneInfo(BaseTransform):
                  meta_keys: tuple = (
                     'scene_name', 'seq_length', 'present_idx', 'co_agents', 'co_length', 'scene_length',
                     'scene_timestamps', 'sample_idx', 'seq_timestamps', 'pose_matrix', 'future_motion_matrix',
-                    'loc_matrix', 'future_motion_rela_matrix'
+                    'loc_matrix', 'future_motion_rela_matrix', 'history_motion_rela_matrix'
                     ),
                 delete_ori_key: bool = True,
                 

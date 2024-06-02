@@ -31,8 +31,7 @@ class BaseMotionHead(BaseTaskHead):
         bias: str = 'auto',
         inter_channels=None,
         n_gru_blocks=3,
-        grid_conf = None,
-        new_grid_conf = None,
+        pc_range = None,
         probabilistic_enable=True,
         prob_on_foreground=False,
         future_dim=6,
@@ -82,8 +81,7 @@ class BaseMotionHead(BaseTaskHead):
         self.ignore_index = ignore_index
         self.using_focal_loss = using_focal_loss
 
-        self.warper = FeatureWarper(pc_range=new_grid_conf[0])
-        self.cropper =  BevFeatureSlicer(grid_conf, new_grid_conf)
+        self.warper = FeatureWarper(pc_range=pc_range)
         self.downsample_conv = ConvModule(
             feat_channels, # type: ignore
             in_channels,

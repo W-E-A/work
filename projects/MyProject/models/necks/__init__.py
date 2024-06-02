@@ -1,4 +1,4 @@
 from .fusion import V2XTransformerFusion
-from .temporal_model import TemporalIdentity, TemporalNaive
+from .temporal_necks import TemporalIdentity, TemporalNaive, Temporal3DConvModel
 
-__all__ = ['V2XTransformerFusion', 'TemporalIdentity', 'TemporalNaive']
+__all__ = ['TemporalIdentity', 'TemporalNaive', 'Temporal3DConvModel']

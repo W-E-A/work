@@ -3,24 +3,34 @@ custom_imports = dict(
     allow_failed_imports=False
 )
 
-# full with multi sweeps
-train_annfile_path = '/mnt/auto-labeling/wyc/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
-val_annfile_path = '/mnt/auto-labeling/wyc/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
-
-# full no sweeps
-# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
-# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
-
-# debug with multi sweeps
-# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
-
-# debug no sweeps
-# train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
-# val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
-
+debug = False # CLOUD
 use_multi_sweeps = True
-delete_pointcloud = True # CLOUD
+
+if debug:
+    
+    if use_multi_sweeps:
+        # debug with multi sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+    else:
+        # debug no sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
+
+    delete_pointcloud = False
+
+else:
+    
+    if use_multi_sweeps:
+        # full with multi sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
+    else:
+        # full no sweeps
+        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
+        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
+
+    delete_pointcloud = True
 
 classes = [
     'car', 'van', 'truck', 'cyclist', 'motorcycle', 'pedestrian'
@@ -32,12 +42,14 @@ agents = [
 lidar_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 mask_range = [-3.0, -1.5, -5.0, 3.0, 1.5, 3.0]
 det_center_range = [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+motion_range = [-50, -50, -5.0, 50, 50, 3.0]
 voxel_size = [0.1, 0.1, 8.0]
 det_out_factor = 4
 corr_out_factor = 4
 motion_out_factor = 5
 det_voxel_size = [voxel_size[0] * det_out_factor, voxel_size[1] * det_out_factor, voxel_size[2]]
 corr_voxel_size = [voxel_size[0] * corr_out_factor, voxel_size[1] * corr_out_factor, voxel_size[2]]
+motion_voxel_size = [voxel_size[0] * motion_out_factor, voxel_size[1] * motion_out_factor, voxel_size[2]]
 
 det_with_velocity = True
 code_size = 9
@@ -58,17 +70,12 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 2 # CLOUD
-num_workers = 4 # CLOUD
+batch_size = 1 if debug else 1 # CLOUD
+num_workers = 1 if debug else 4 # CLOUD
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-# sample_agents = (
-#     'ego_vehicle', 'infrastructure',
-# )
-# sample_agents = (
-#     'ego_vehicle', 'other_vehicle', 'infrastructure',
-# )
+train_mode = 'fusion'
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
 ego_name = 'ego_vehicle'
@@ -77,6 +84,7 @@ motion_filter_invalid = False
 corr_only_vehicle = False
 corr_filter_invalid = False
 vehicle_id_list = [0, 1, 2] # agents 'car', 'van', 'truck'
+shared_weights = ['corr_model']
 
 train_pipline = [
     dict(
@@ -179,6 +187,21 @@ train_scene_pipline = [
         enable_visualize=False,
         verbose = False,
     ),
+    dict(
+        type = 'MakeMotionLabels',
+        pc_range_lidar = lidar_range,
+        voxel_size_lidar = corr_voxel_size,
+        infrastructure_name = infrastructure_name,
+        generate_corr_heatmap = True,
+        just_present = False,
+        ego_id = -100,
+        motion_only_vehicle = motion_only_vehicle,
+        corr_only_vehicle = corr_only_vehicle,
+        motion_filter_invalid = motion_filter_invalid,
+        corr_filter_invalid = corr_filter_invalid,
+        vehicle_id_list = vehicle_id_list,
+        ignore_index = 255,
+    ),
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
@@ -236,7 +259,7 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=True), # CLOUD
+          shuffle=False if debug else True), # CLOUD
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path,
@@ -291,9 +314,153 @@ test_evaluator = dict(
     with_velocity=det_with_velocity,
 )
 
+corr_model = dict(
+    type='CorrelationModel',
+    init_cfg=dict(type='Pretrained', 
+    checkpoint='/mnt/auto-labeling/wyc/wea_work/deepaccident/work_dirs/infra-0530-t2/epoch_20.pth'),
+    pts_voxel_encoder = dict(
+        type = 'PillarFeatureNet',
+        in_channels = 5 if use_multi_sweeps else 4,
+        feat_channels = (64, ),
+        with_distance = False,
+        with_cluster_center = True,
+        with_voxel_center = True,
+        voxel_size = voxel_size,
+        point_cloud_range = tuple(lidar_range),
+        norm_cfg = dict(
+            type = 'BN1d',
+            eps = 1e-3,
+            momentum = 0.01),
+        mode = 'max',
+        legacy = False
+    ),
+    pts_middle_encoder=dict(
+        type = 'PointPillarsScatterWrapper',
+        in_channels = 64,
+        lidar_range = lidar_range,
+        voxel_size = voxel_size
+    ),
+    pts_backbone=dict(
+        type='SECOND',
+        in_channels=64,
+        out_channels=[64, 128, 256],
+        layer_nums=[3, 5, 5],
+        layer_strides=[2, 2, 2],
+        norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
+        conv_cfg=dict(type='Conv2d', bias=False)
+    ),
+    pts_neck=dict(
+        type='SECONDFPN',
+        in_channels=[64, 128, 256],
+        out_channels=[64, 64, 64],
+        upsample_strides=[0.5, 1, 2],
+        norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
+        upsample_cfg=dict(type='deconv', bias=False),
+        use_conv_for_no_stride=True
+    ),
+    temporal_neck=dict(
+        type='Temporal3DConvModel',
+        pc_range=lidar_range,
+        in_channels=192, # after channel shrink
+        n_history_and_present=present_idx+1,
+        input_shape=(128, 128), # 256, 256 or 128, 128 or 64, 64
+        inter_channels=96, # 384 -> 192 -> ...
+        extra_in_channels=96, # channel expand
+        n_spatial_layers_between_temporal_layers=0,
+        use_pyramid_pooling=True, # input shape pooling
+        input_egopose=False, # cat 6 DOF info
+        with_skip_connect=True, # pred residual
+    ), # B, 192, 256, 256
+    multi_task_head=dict(
+        type='MTHead',
+        det_head=dict(
+            type='CenterHeadModified',
+            in_channels=192,
+            tasks=det_tasks,
+            bbox_coder=dict(
+                type='CenterPointBBoxCoder',
+                post_center_range=det_center_range,
+                max_num=500,
+                score_threshold=0.1,
+                out_size_factor=det_out_factor,
+                voxel_size=voxel_size[:2],
+                pc_range=lidar_range[:2],
+                code_size=code_size),
+            common_heads=det_common_heads,
+            loss_cls=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
+            loss_bbox=dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
+            separate_head=dict(
+                type='SeparateHead',
+                head_conv=64,
+                init_bias=-2.19,
+                final_kernel=3
+            ),
+            share_conv_channel=64,
+            num_heatmap_convs=2,
+            norm_bbox=True,
+            with_velocity=det_with_velocity,
+        ),
+        motion_head=dict(
+            type='IterativeFlow',
+            task_dict={
+                'segmentation': 2,
+                'instance_center': 1,
+                'instance_offset': 2,
+                'instance_flow': 2,
+            },
+            distribution_log_sigmas=[-5.0, 5.0],
+            class_weights=[1.0, 2.0],
+            in_channels=128, # after channel shrink
+            feat_channels=192,
+            prob_latent_dim=32,
+            receptive_field=present_idx+1,
+            n_future=seq_length-present_idx-1,
+            pc_range=lidar_range,
+            using_spatial_prob=True,
+            using_focal_loss=True,
+            n_gru_blocks=1,
+            future_discount=1,
+            loss_weights={
+                'loss_motion_seg': 5.0,
+                'loss_motion_centerness': 1.0,
+                'loss_motion_offset': 1.0,
+                'loss_motion_flow': 1.0,
+                'loss_motion_prob': 10.0,
+            },
+            sample_ignore_mode='past_valid',
+            posterior_with_label=False,
+        ),
+        corr_head=dict(
+            type='CorrGenerateHead',
+            pc_range=lidar_range,
+            voxel_size=corr_voxel_size,
+            n_present_and_future=seq_length - present_idx, # future and present
+            label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
+            in_channels=128, # after channel shrink
+            feat_channels=192,
+            loss_cfg=dict(
+                type='CorrelationLoss',
+                focal_gamma=2.0,
+                gaussian_gamma=1.0,
+                pos_weight=0.25,
+                neg_weight=0.75,
+            ),
+            separate_head=dict(
+                type='SeparateHead',
+                head_conv=64,
+                init_bias=-2.19,
+                final_kernel=3
+            ),
+            share_conv_channel=64,
+            num_heatmap_convs=2,
+        )
+    )
+)
+
 model = dict(
     type='EgoModel',
-    corr_model = None,
+    corr_model = corr_model,
+    freeze_inf_model = True,
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
         delete_pointcloud=delete_pointcloud,
@@ -358,6 +525,29 @@ model = dict(
         input_egopose=False, # cat 6 DOF info
         with_skip_connect=True, # pred residual
     ), # B, 192, 256, 256
+    pts_fusion_layer=dict(
+        type='V2XTransformerFusion',
+        in_channels=sum([64, 64, 64]),
+        n_head=3,
+        mid_channels=256,
+        dense_fusion=True,
+    ),
+    # train_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=train_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
+    # test_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=test_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
+    # temporal_backbone=dict(
+    #     type='TemporalIdentity',
+    #     position='last'
+    # ),
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
@@ -397,6 +587,8 @@ model = dict(
         max_objs=500,
         min_radius=2,
         code_weights=code_weights, # code_size
+        train_mode=train_mode,
+        shared_weights=shared_weights,
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
@@ -411,21 +603,20 @@ model = dict(
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
     ),
     pts_fusion_cfg=dict(
-        corr_thresh = 0.3,
-        train_ego_name=ego_name, # FIXME
-        test_ego_name=ego_name,
-        corr_pc_range=lidar_range,
+        corr_thresh = 0.1,
+        pc_range = lidar_range,
     ),
     co_cfg=dict(
-        infrastructure_name=infrastructure_name
+        infrastructure_name = infrastructure_name,
+        ego_name = ego_name
     )
+    
 )
 
 
 
 lr = 1 * 1e-4
 checkpoint_interval = 2
-max_checkpoint_num = 4
 log_interval = 1
 
 log_level = 'INFO'
@@ -440,11 +631,11 @@ default_hooks = dict(
                 sampler_seed=dict(type='DistSamplerSeedHook'),
                 logger=dict(type='LoggerHook', interval=log_interval),
                 param_scheduler=dict(type='ParamSchedulerHook'),
-                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval, max_keep_ckpts= max_checkpoint_num),
+                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
-custom_hooks = [
+custom_hooks = [] if debug else [
     dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/gpu_messages')
-] # CLOUD
+]# CLOUD
 
 env_cfg = dict(
     cudnn_benchmark=True,
