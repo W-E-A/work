@@ -208,11 +208,14 @@ class EgoModel(MVXTwoStageDetector):
                 ego_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
 
             # coop targets
+            # inf_coop_instances=[]
             # ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
             # input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
             # for b in range(batch_size):
             #     ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
-            # inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # 1*B
+            # for samples in input_samples_inf:
+            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+            #     inf_coop_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
             # for b in range(batch_size):
             #     ego_track_id = ego_coop_instances[b].track_id
             #     # other visible 
@@ -297,10 +300,13 @@ class EgoModel(MVXTwoStageDetector):
 
             # gt
             # coop targets
+            inf_coop_instances=[]
             ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
             for b in range(batch_size):
                 ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
-            inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # 1*B
+            for samples in input_samples_inf:
+                valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+                inf_coop_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
             for b in range(batch_size):
                 ego_track_id = ego_coop_instances[b].track_id
                 # other visible 
@@ -478,7 +484,8 @@ class EgoModel(MVXTwoStageDetector):
                 #fusion det loss
                 det_forward_kwargs = {}
                 fusion_feat_dict = self.multi_task_head(ego_fusion_result,det_forward_kwargs=det_forward_kwargs)
-                heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(corr_instances) # 用相关的instance监督
+                # heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(corr_instances) # 用相关的instance监督
+                heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(coop_instances) # 用协同的instance监督
                 det_loss_kwargs = {
                     'heatmaps':heatmaps,# necessary
                     'anno_boxes':anno_boxes,# necessary
