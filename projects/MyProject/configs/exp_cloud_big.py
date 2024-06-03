@@ -72,6 +72,7 @@ det_common_heads = dict(
 
 batch_size = 1 if debug else 2 # CLOUD
 num_workers = 1 if debug else 4 # CLOUD
+train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
@@ -508,12 +509,12 @@ model = dict(
         mid_channels=256,
         dense_fusion=True,
     ),
-    # train_comm_expand_layer=dict(
-    #     type='GaussianConv',
-    #     kernel_size=train_comm_ksize,
-    #     sigma=1.0,
-    #     impl=True,
-    # ),
+    train_comm_expand_layer=dict(
+        type='GaussianConv',
+        kernel_size=train_comm_ksize,
+        sigma=1.0,
+        impl=True,
+    ),
     # test_comm_expand_layer=dict(
     #     type='GaussianConv',
     #     kernel_size=test_comm_ksize,
