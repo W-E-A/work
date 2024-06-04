@@ -87,6 +87,8 @@ class EgoModel(MVXTwoStageDetector):
             self.train_comm_expand_layer = MODELS.build(train_comm_expand_layer)
         self.comm_rate = 0.0
         self.comm_count = 0
+        self.corr_iou = 0.0
+        self.iou_count = 0
 
     def extract_pts_feat(
         self,
@@ -552,28 +554,36 @@ class EgoModel(MVXTwoStageDetector):
                 ) 
 
                 #得到相关性heatmap 以此筛选出协调区域
-                # gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
-                # for idx in range(len(gt_corr_heatmaps)):
-                #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
-                # gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
-                # pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
+                gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                for idx in range(len(gt_corr_heatmaps)):
+                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
+                gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
+                pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
                 # corr_mask = gt_corr_heatmaps > self.corr_thresh
-                # # corr_mask = pred_corr_heatmap > self.corr_thresh
+                corr_mask = pred_corr_heatmap > self.corr_thresh
+
+                #计算corr_heatmap的IOU
+                gt_mask = gt_corr_heatmaps > self.corr_thresh
+                pred_mask = pred_corr_heatmap > self.corr_thresh
+                corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
+                self.corr_iou += corr_iou.item()
+                self.iou_count += 1
+                print("corr_iou:",self.corr_iou / self.iou_count)
                 
                 #where2comm
-                det_heatmaps = []
-                for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
-                    pred_result = preds_dict[0]
-                    det_heatmaps.append(pred_result['heatmap'].sigmoid())
-                det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
-                det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
-                comm_mask = torch.where(
-                        det_heatmap > self.score_threshold,
-                        torch.ones_like(det_heatmap, device=get_device()),
-                        torch.zeros_like(det_heatmap, device=get_device()),
-                    ) # B 1 H W
-                comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
-                corr_mask = comm_mask > 0.00 #where2comm进行融合
+                # det_heatmaps = []
+                # for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                #     pred_result = preds_dict[0]
+                #     det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                # det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                # det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                # comm_mask = torch.where(
+                #         det_heatmap > self.score_threshold,
+                #         torch.ones_like(det_heatmap, device=get_device()),
+                #         torch.zeros_like(det_heatmap, device=get_device()),
+                #     ) # B 1 H W
+                # comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
+                # corr_mask = comm_mask > 0.00 #where2comm进行融合
 
 
                 #对路端特帧进行位姿变换
@@ -588,7 +598,7 @@ class EgoModel(MVXTwoStageDetector):
                 rate = torch.sum(warp_corr_mask[0] > 0.5) / warp_corr_mask[0].numel()
                 self.comm_rate += rate.item()
                 self.comm_count += 1
-                print(self.comm_rate / self.comm_count)
+                print("comm_rate:", self.comm_rate / self.comm_count)
                 #融合
                 ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
 
