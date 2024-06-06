@@ -141,11 +141,11 @@ class Temporal3DConvModel(BaseModule):
 
     def forward(self, x, history_egomotion=None, aug_transform=None):
         input_x = x.clone()
-        if history_egomotion:
+        if history_egomotion is not None:
             # when warping features from temporal frames, the bev-transform should be considered
             x = self.warper.cumulative_warp_features(
                 x, history_egomotion,
-                mode='bilinear', bev_transform=aug_transform,
+                mode='bilinear',
             )
         if self.input_egopose:
             b, s, _, h, w = x.shape

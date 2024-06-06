@@ -68,6 +68,11 @@ class CorrelationModel(MVXTwoStageDetector):
 
         if self.co_cfg:
             self.infrastructure_name = self.co_cfg.get('infrastructure_name', 'infrastructure')
+            self.ego_name = self.co_cfg.get('ego_name', 'ego_vehicle')
+        
+        self.corr_iou = 0.0
+        self.iou_count = 0
+
 
     def train_step(self, data: Union[dict, tuple, list],
                    optim_wrapper: OptimWrapper) -> Dict[str, torch.Tensor]:
@@ -180,6 +185,7 @@ class CorrelationModel(MVXTwoStageDetector):
         save_dir = f'{scene_name}_{seq_timestamps_0}'
         ego_ids = list(range(co_length))
         self.infrastructure_id = co_agents.index(self.infrastructure_name)
+        self.ego_id = co_agents.index(self.ego_name)
         ego_ids.remove(self.infrastructure_id)
         if mode == 'loss':
             temp_dict = {id:i for i, id in enumerate(ego_ids)}
@@ -483,6 +489,19 @@ class CorrelationModel(MVXTwoStageDetector):
             )
 
             return_dict = {}
+            if 'corr_pred' in predict_dict:
+                #计算corr_heatmap的IOU
+                pred_corr_heatmap = predict_dict['corr_pred'][0]
+                gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                for idx in range(len(gt_corr_heatmaps)):
+                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_id,:,:]
+                gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
+                gt_mask = gt_corr_heatmaps > 0.0
+                pred_mask = pred_corr_heatmap > 0.2
+                corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
+                self.corr_iou += corr_iou.item()
+                self.iou_count += 1
+                print("corr_iou:",self.corr_iou / self.iou_count)
 
             if 'det_pred' in predict_dict:
                 det_ret_list = []
@@ -545,8 +564,8 @@ class CorrelationModel(MVXTwoStageDetector):
                 ################################ SHOW MOTION RESULT ################################
                 return_dict['motion'] = predict_dict['motion_pred']
             
-            if 'corr_pred' in predict_dict:
-                corr_heatmaps = predict_dict['corr_pred']
+            # if 'corr_pred' in predict_dict:
+            #     corr_heatmaps = predict_dict['corr_pred']
                 ################################ SHOW CORRELATION HEATMAP ################################
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, name in enumerate(ego_names):
@@ -564,10 +583,10 @@ class CorrelationModel(MVXTwoStageDetector):
                 # else:
                 #     return []
                 ################################ SHOW CORRELATION HEATMAP ################################
-                return_dict['corr'] = corr_heatmaps
+                # return_dict['corr'] = corr_heatmaps
 
-                corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
-                corr_heatmaps_label, = self.multi_task_head.corr_head.prepare_corr_heatmaps(corr_heatmaps) # c-1, B, 1, h, w
+                # corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                # corr_heatmaps_label, = self.multi_task_head.corr_head.prepare_corr_heatmaps(corr_heatmaps) # c-1, B, 1, h, w
                 ################################ SHOW CORRELATION HEATMAP ################################
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
 

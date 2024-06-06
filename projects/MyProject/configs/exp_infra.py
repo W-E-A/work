@@ -42,14 +42,11 @@ agents = [
 lidar_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 mask_range = [-3.0, -1.5, -5.0, 3.0, 1.5, 3.0]
 det_center_range = [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
-motion_range = [-50, -50, -5.0, 50, 50, 3.0]
 voxel_size = [0.1, 0.1, 8.0]
 det_out_factor = 4
 corr_out_factor = 4
-motion_out_factor = 5
 det_voxel_size = [voxel_size[0] * det_out_factor, voxel_size[1] * det_out_factor, voxel_size[2]]
 corr_voxel_size = [voxel_size[0] * corr_out_factor, voxel_size[1] * corr_out_factor, voxel_size[2]]
-motion_voxel_size = [voxel_size[0] * motion_out_factor, voxel_size[1] * motion_out_factor, voxel_size[2]]
 
 det_with_velocity = True
 code_size = 9
@@ -192,8 +189,6 @@ train_scene_pipline = [
     ),
     dict(
         type = 'MakeMotionLabels',
-        pc_range_motion = motion_range,
-        voxel_size_motion = motion_voxel_size,
         pc_range_lidar = lidar_range,
         voxel_size_lidar = corr_voxel_size,
         infrastructure_name = infrastructure_name,
@@ -210,7 +205,7 @@ train_scene_pipline = [
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
-    dict(type='RemoveHistoryInputs'),
+    # dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
@@ -235,8 +230,6 @@ test_scene_pipline = [
     ),
     dict(
         type = 'MakeMotionLabels',
-        pc_range_motion = motion_range,
-        voxel_size_motion = motion_voxel_size,
         pc_range_lidar = lidar_range,
         voxel_size_lidar = corr_voxel_size,
         infrastructure_name = infrastructure_name,
@@ -253,7 +246,7 @@ test_scene_pipline = [
     # dict(type='DestoryEGOBox', ego_id = -100),
     dict(type='RemoveHistoryLabels'),
     dict(type='RemoveFutureLabels'),
-    dict(type='RemoveHistoryInputs'),
+    # dict(type='RemoveHistoryInputs'),
     dict(type='RemoveFutureInputs'),
     dict(type='PackSceneInfo'),
     dict(type='DropSceneKeys',keys=('seq', 'sample_interval')),
@@ -294,7 +287,7 @@ test_dataloader = dict(
     drop_last=False,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=False),
+          shuffle=True),
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = val_annfile_path,
@@ -368,12 +361,12 @@ model = dict(
     pts_neck=dict(
         type='SECONDFPN',
         in_channels=[64, 128, 256],
-        out_channels=[128, 128, 128],
+        out_channels=[64, 64, 64],
         upsample_strides=[0.5, 1, 2],
         norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
         upsample_cfg=dict(type='deconv', bias=False),
         use_conv_for_no_stride=True
-    ), # B, 384, 256, 256
+    ), # B, 192, 256, 256
     # pts_fusion_layer=dict(
     #     type='V2XTransformerFusion',
     #     in_channels=sum([128, 128, 128]),
@@ -393,15 +386,28 @@ model = dict(
     #     sigma=1.0,
     #     impl=True,
     # ),
-    # temporal_backbone=dict(
+    # temporal_neck=dict(
     #     type='TemporalIdentity',
     #     position='last'
     # ),
+    temporal_neck=dict(
+        type='Temporal3DConvModel',
+        pc_range=lidar_range,
+        in_channels=192, # after channel shrink
+        n_history_and_present=present_idx+1,
+        input_shape=(128, 128), # 256, 256 or 128, 128 or 64, 64
+        inter_channels=96, # 384 -> 192 -> ...
+        extra_in_channels=96, # channel expand
+        n_spatial_layers_between_temporal_layers=0,
+        use_pyramid_pooling=True, # input shape pooling
+        input_egopose=False, # cat 6 DOF info
+        with_skip_connect=True, # pred residual
+    ), # B, 192, 256, 256
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
             type='CenterHeadModified',
-            in_channels=sum([128, 128, 128]),
+            in_channels=192,
             tasks=det_tasks,
             bbox_coder=dict(
                 type='CenterPointBBoxCoder',
@@ -437,12 +443,11 @@ model = dict(
             distribution_log_sigmas=[-5.0, 5.0],
             class_weights=[1.0, 2.0],
             in_channels=128, # after channel shrink
-            feat_channel=384,
+            feat_channels=192,
             prob_latent_dim=32,
             receptive_field=present_idx+1,
             n_future=seq_length-present_idx-1,
-            grid_conf = [lidar_range, det_voxel_size],
-            new_grid_conf = [motion_range, motion_voxel_size],
+            pc_range=lidar_range,
             using_spatial_prob=True,
             using_focal_loss=True,
             n_gru_blocks=1,
@@ -461,9 +466,10 @@ model = dict(
             type='CorrGenerateHead',
             pc_range=lidar_range,
             voxel_size=corr_voxel_size,
-            n_future_and_present=seq_length - present_idx, # future and present
+            n_present_and_future=seq_length - present_idx, # future and present
             label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
-            in_channels=sum([128, 128, 128]),
+            in_channels=128, # after channel shrink
+            feat_channels=192,
             loss_cfg=dict(
                 type='CorrelationLoss',
                 focal_gamma=2.0,
