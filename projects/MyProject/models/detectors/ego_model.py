@@ -515,8 +515,8 @@ class EgoModel(MVXTwoStageDetector):
                 # ################################ SHOW CORRELATION HEATMAP ################################
 
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                corr_mask = gt_corr_heatmaps > self.corr_thresh
-                # corr_mask = pred_corr_heatmap > self.corr_thresh
+                # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
