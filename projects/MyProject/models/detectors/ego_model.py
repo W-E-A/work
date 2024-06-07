@@ -251,45 +251,45 @@ class EgoModel(MVXTwoStageDetector):
             #     coop_instances.append(instance[instance.coop_isvalid])
 
             # 根据inf下的ego相关性提取高相关的egoinstance      
-            # infrastructure_instances = []
-            # input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
-            # for samples in input_samples_inf:
-            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
-            #     infrastructure_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+            infrastructure_instances = []
+            input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
+            for samples in input_samples_inf:
+                valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+                infrastructure_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
             
-            # corr_dilate_heatmaps = []
-            # inf_dilate_heatmaps = present_seq[self.infrastructure_id]['corr_dilate_heatmaps']
-            # corr_dilate_heatmaps.append(torch.stack(inf_dilate_heatmaps, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous()) # c-1, B, 1, h, w
+            corr_dilate_heatmaps = []
+            inf_dilate_heatmaps = present_seq[self.infrastructure_id]['corr_dilate_heatmaps']
+            corr_dilate_heatmaps.append(torch.stack(inf_dilate_heatmaps, dim=0).unsqueeze(2).permute(1, 0, 2, 3, 4).contiguous()) # c-1, B, 1, h, w
 
-            # from mmdet3d.models.utils import draw_heatmap_gaussian
-            # corr_track_id_batch = []
-            # corr_score_batch = []
-            # high_corr_score_heatmap_batch = []
-            # for b in range(batch_size):
-            #     center_int_list, track_id_list=self.multi_task_head.det_head.find_high_corr_gt_instance(infrastructure_instances[b])  # 提取inf目标的中心坐标和trackid
-            #     corr_score = []
-            #     corr_track_id = []
-            #     high_corr_score_heatmap = torch.zeros((256, 256))
-            #     for idx, center_point in enumerate(center_int_list):
-            #         score = corr_dilate_heatmaps[0][self.ego_id][b][0, center_point[1], center_point[0]]
-            #         if float(score.item()) > 0.2:   # 筛选阈值
-            #             draw_heatmap_gaussian(high_corr_score_heatmap,center_point,5)
-            #             corr_score.append(float(score.item()))
-            #             corr_track_id.append(int(track_id_list[idx].item()))
-            #         else:
-            #             draw_heatmap_gaussian(high_corr_score_heatmap,center_point,2)
-            #     corr_track_id_batch.append(corr_track_id)
-            #     corr_score_batch.append(corr_score)
-            #     high_corr_score_heatmap_batch.append(high_corr_score_heatmap)
+            from mmdet3d.models.utils import draw_heatmap_gaussian
+            corr_track_id_batch = []
+            corr_score_batch = []
+            high_corr_score_heatmap_batch = []
+            for b in range(batch_size):
+                center_int_list, track_id_list=self.multi_task_head.det_head.find_high_corr_gt_instance(infrastructure_instances[b])  # 提取inf目标的中心坐标和trackid
+                corr_score = []
+                corr_track_id = []
+                high_corr_score_heatmap = torch.zeros((256, 256))
+                for idx, center_point in enumerate(center_int_list):
+                    score = corr_dilate_heatmaps[0][self.ego_id][b][0, center_point[1], center_point[0]]
+                    if float(score.item()) > 0.1:   # 筛选阈值
+                        draw_heatmap_gaussian(high_corr_score_heatmap,center_point,5)
+                        corr_score.append(float(score.item()))
+                        corr_track_id.append(int(track_id_list[idx].item()))
+                    else:
+                        draw_heatmap_gaussian(high_corr_score_heatmap,center_point,2)
+                corr_track_id_batch.append(corr_track_id)
+                corr_score_batch.append(corr_score)
+                high_corr_score_heatmap_batch.append(high_corr_score_heatmap)
             
-            # input_samples_ego = present_seq[self.ego_idx]['data_samples'] # batch
-            # corr_instances = []               
-            # for b, samples in enumerate(input_samples_ego):
-            #     for idx ,track_id_this_sample in enumerate(samples.gt_instances_3d.track_id):
-            #         if track_id_this_sample in corr_track_id_batch[b]:
-            #             samples.gt_instances_3d.bbox_3d_isvalid[idx] = True # 筛选ego中超过相关性阈值的目标
-            #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
-            #     corr_instances.append(samples.gt_instances_3d[valid_mask])
+            input_samples_ego = present_seq[self.ego_idx]['data_samples'] # batch
+            corr_instances = []               
+            for b, samples in enumerate(input_samples_ego):
+                for idx ,track_id_this_sample in enumerate(samples.gt_instances_3d.track_id):
+                    if track_id_this_sample in corr_track_id_batch[b]:
+                        samples.gt_instances_3d.bbox_3d_isvalid[idx] = True # 筛选ego中超过相关性阈值的目标
+                valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+                corr_instances.append(samples.gt_instances_3d[valid_mask])
 
         else:
             if self.input_mode == 'temporal':
@@ -311,7 +311,12 @@ class EgoModel(MVXTwoStageDetector):
                 ego_seq_neck_features = self.pts_neck(self.pts_backbone(ego_seq_middle_features))[0] # seq*batch c h w
                 _, c, h, w = ego_seq_neck_features.shape
                 ego_seq_neck_features = ego_seq_neck_features.view(present_idx+1, -1, c, h, w).permute(1, 0, 2, 3, 4).contiguous() # batch seq c h w
-                ego_features = [self.temporal_neck(ego_seq_neck_features)] # batch c h w
+                history_egomotion = []
+                for b in range(batch_size):
+                    history_egomotion.append(scene_info[b].history_motion_rela_matrix[self.ego_id]) 
+                #输入motion变换矩阵
+                history_egomotion = torch.tensor(history_egomotion) #batch seq 4 4
+                ego_features = [self.temporal_neck(ego_seq_neck_features, history_egomotion)] # batch c h w
                 #inf
                 inf_seq_middle_features = [] # seq batch c h w
                 input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
@@ -562,9 +567,9 @@ class EgoModel(MVXTwoStageDetector):
                                 lidar_path = ego_metas[b]['lidar_path'], # type: ignore
                             )
                         )
-                        # sample.gt_instances_3d = ego_instances[b] # type: ignore
+                        sample.gt_instances_3d = ego_instances[b] # type: ignore
                         # sample.gt_instances_3d = coop_instances[b] # type: ignore
-                        sample.gt_instances_3d = corr_instances[b] # type: ignore
+                        # sample.gt_instances_3d = corr_instances[b] # type: ignore
 
                         sample.gt_instances_3d.pop('track_id') # no need array
                         sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
