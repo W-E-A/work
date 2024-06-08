@@ -396,10 +396,10 @@ class EgoModel(MVXTwoStageDetector):
                 )
 
                 #得到相关性heatmap 以此筛选出协调区域
-                # gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
-                # for idx in range(len(gt_corr_heatmaps)):
-                #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
-                # gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
+                gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                for idx in range(len(gt_corr_heatmaps)):
+                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
+                gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
 
                 #可视化
                 #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx:self.ego_idx+1,:,:]
@@ -453,24 +453,24 @@ class EgoModel(MVXTwoStageDetector):
                 #     return []
                 # ################################ SHOW CORRELATION HEATMAP ################################
 
-                # pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
                 # corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #where2comm
-                det_heatmaps = []
-                for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
-                    pred_result = preds_dict[0]
-                    det_heatmaps.append(pred_result['heatmap'].sigmoid())
-                det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
-                det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
-                comm_mask = torch.where(
-                        det_heatmap > self.score_threshold,
-                        torch.ones_like(det_heatmap, device=get_device()),
-                        torch.zeros_like(det_heatmap, device=get_device()),
-                    ) # B 1 H W
-                comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
-                corr_mask = comm_mask > 0.00 #where2comm进行融合
+                # det_heatmaps = []
+                # for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                #     pred_result = preds_dict[0]
+                #     det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                # det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                # det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                # comm_mask = torch.where(
+                #         det_heatmap > self.score_threshold,
+                #         torch.ones_like(det_heatmap, device=get_device()),
+                #         torch.zeros_like(det_heatmap, device=get_device()),
+                #     ) # B 1 H W
+                # comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
+                # corr_mask = comm_mask > 0.00 #where2comm进行融合
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -486,8 +486,8 @@ class EgoModel(MVXTwoStageDetector):
                 #fusion det loss
                 det_forward_kwargs = {}
                 fusion_feat_dict = self.multi_task_head(ego_fusion_result,det_forward_kwargs=det_forward_kwargs)
-                # heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(corr_instances) # 用相关的instance监督
-                heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(coop_instances) # 用协同的instance监督
+                heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(corr_instances) # 用相关的instance监督
+                # heatmaps, anno_boxes, inds, masks = self.multi_task_head.det_head.get_targets(coop_instances) # 用协同的instance监督
                 det_loss_kwargs = {
                     'heatmaps':heatmaps,# necessary
                     'anno_boxes':anno_boxes,# necessary
@@ -559,16 +559,16 @@ class EgoModel(MVXTwoStageDetector):
                     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # corr_mask = gt_corr_heatmaps > self.corr_thresh
-                corr_mask = pred_corr_heatmap > self.corr_thresh
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #计算corr_heatmap的IOU
-                gt_mask = gt_corr_heatmaps > self.corr_thresh
-                pred_mask = pred_corr_heatmap > self.corr_thresh
-                corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
-                self.corr_iou += corr_iou.item()
-                self.iou_count += 1
-                print("corr_iou:",self.corr_iou / self.iou_count)
+                # gt_mask = gt_corr_heatmaps > self.corr_thresh
+                # pred_mask = pred_corr_heatmap > self.corr_thresh
+                # corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
+                # self.corr_iou += corr_iou.item()
+                # self.iou_count += 1
+                # print("corr_iou:",self.corr_iou / self.iou_count)
                 
                 #where2comm
                 # det_heatmaps = []
