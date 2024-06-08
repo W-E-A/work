@@ -28,7 +28,7 @@ class EgoModel(MVXTwoStageDetector):
                  pts_neck: Optional[dict] = None,
                  temporal_neck: Optional[dict] = None,
                  multi_task_head: Optional[dict] = None,
-                #  train_comm_expand_layer: Optional[dict] = None,
+                 train_comm_expand_layer: Optional[dict] = None,
                 #  test_comm_expand_layer: Optional[dict] = None,
                  pts_train_cfg: Optional[dict] = None,
                  pts_test_cfg: Optional[dict] = None,
@@ -82,12 +82,21 @@ class EgoModel(MVXTwoStageDetector):
 
         if self.pts_fusion_cfg:
             self.corr_thresh = self.pts_fusion_cfg.get("corr_thresh", 0.2)
+            self.score_threshold = self.pts_test_cfg.get('score_threshold', 0.1)
             pc_range = self.pts_fusion_cfg.get("pc_range", [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0])
             self.warp_size = (0.5 * (pc_range[3] - pc_range[0]), 0.5 * (pc_range[4] - pc_range[1]))
 
         if self.co_cfg:
             self.infrastructure_name = self.co_cfg.get('infrastructure_name', 'infrastructure')
             self.ego_name = self.co_cfg.get('ego_name', 'ego_vehicle')
+        
+        if train_comm_expand_layer:
+            self.train_comm_expand_layer = MODELS.build(train_comm_expand_layer)
+            
+        self.comm_rate = 0.0
+        self.comm_count = 0
+        self.corr_iou = 0.0
+        self.iou_count = 0
 
     def extract_pts_feat(
         self,
@@ -458,11 +467,11 @@ class EgoModel(MVXTwoStageDetector):
                     corr_forward_kwargs=corr_forward_kwargs,
                 )
 
-                #得到相关性heatmap 以此筛选出协调区域
-                gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
-                for idx in range(len(gt_corr_heatmaps)):
-                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
-                gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
+                # #得到相关性heatmap 以此筛选出协调区域
+                # gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                # for idx in range(len(gt_corr_heatmaps)):
+                #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
+                # gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx:self.ego_idx+1,:,:]
                 # corr_heatmaps_label, = self.corr_model.multi_task_head.corr_head.prepare_corr_heatmaps(
                 #     gt_corr_heatmaps
@@ -514,9 +523,24 @@ class EgoModel(MVXTwoStageDetector):
                 #     return []
                 # ################################ SHOW CORRELATION HEATMAP ################################
 
-                pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # corr_mask = gt_corr_heatmaps > self.corr_thresh
-                corr_mask = pred_corr_heatmap > self.corr_thresh
+                # pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
+                # # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = pred_corr_heatmap > self.corr_thresh
+
+                # where2comm
+                det_heatmaps = []
+                for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                    pred_result = preds_dict[0]
+                    det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                comm_mask = torch.where(
+                        det_heatmap > self.score_threshold,
+                        torch.ones_like(det_heatmap, device=get_device()),
+                        torch.zeros_like(det_heatmap, device=get_device()),
+                    ) # B 1 H W
+                comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
+                corr_mask = comm_mask > 0.00 #where2comm进行融合
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -526,6 +550,7 @@ class EgoModel(MVXTwoStageDetector):
                 infrastructure_feature = infrastructure_features[0] # C, H, W
                 warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
                 warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
+
                 #融合
                 ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
 
@@ -604,9 +629,31 @@ class EgoModel(MVXTwoStageDetector):
                     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                corr_mask = gt_corr_heatmaps > self.corr_thresh
-                # corr_mask = pred_corr_heatmap > self.corr_thresh
+                # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                corr_mask = pred_corr_heatmap > self.corr_thresh
 
+                #计算corr_heatmap的IOU
+                # gt_mask = gt_corr_heatmaps > self.corr_thresh
+                # pred_mask = pred_corr_heatmap > self.corr_thresh
+                # corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
+                # self.corr_iou += corr_iou.item()
+                # self.iou_count += 1
+                # print("corr_iou:",self.corr_iou / self.iou_count)
+
+                #where2comm
+                # det_heatmaps = []
+                # for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                #     pred_result = preds_dict[0]
+                #     det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                # det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                # det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                # comm_mask = torch.where(
+                #         det_heatmap > self.score_threshold,
+                #         torch.ones_like(det_heatmap, device=get_device()),
+                #         torch.zeros_like(det_heatmap, device=get_device()),
+                #     ) # B 1 H W
+                # comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
+                # corr_mask = comm_mask > 0.00 #where2comm进行融合
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -616,6 +663,11 @@ class EgoModel(MVXTwoStageDetector):
                 infrastructure_feature = infrastructure_features[0] # C, H, W
                 warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
                 warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
+                #计算通信量
+                rate = torch.sum(warp_corr_mask[0] > 0.5) / warp_corr_mask[0].numel()
+                self.comm_rate += rate.item()
+                self.comm_count += 1
+                print("comm_rate:", self.comm_rate / self.comm_count)
                 #融合
                 ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
 

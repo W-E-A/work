@@ -52,6 +52,7 @@ corr_voxel_size = [voxel_size[0] * corr_out_factor, voxel_size[1] * corr_out_fac
 motion_voxel_size = [voxel_size[0] * motion_out_factor, voxel_size[1] * motion_out_factor, voxel_size[2]]
 
 det_with_velocity = True
+train_comm_ksize=5
 code_size = 9
 # code_size = 7
 code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
@@ -532,21 +533,17 @@ model = dict(
         mid_channels=256,
         dense_fusion=True,
     ),
-    # train_comm_expand_layer=dict(
-    #     type='GaussianConv',
-    #     kernel_size=train_comm_ksize,
-    #     sigma=1.0,
-    #     impl=True,
-    # ),
+    train_comm_expand_layer=dict(
+        type='GaussianConv',
+        kernel_size=train_comm_ksize,
+        sigma=1.0,
+        impl=True,
+    ),
     # test_comm_expand_layer=dict(
     #     type='GaussianConv',
     #     kernel_size=test_comm_ksize,
     #     sigma=1.0,
     #     impl=True,
-    # ),
-    # temporal_backbone=dict(
-    #     type='TemporalIdentity',
-    #     position='last'
     # ),
     multi_task_head=dict(
         type='MTHead',
