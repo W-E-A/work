@@ -361,19 +361,38 @@ class EgoModel(MVXTwoStageDetector):
                     return_neck_features = True) # FIXME 4 times
                 ego_features = pts_feat_dict_ego['neck_features'] # B C H W
 
-                # infrastructure的所有输入
-                input_dict_inf = present_seq[self.infrastructure_id]['inputs'] # voxel batch
+                #inf
+                inf_seq_middle_features = [] # seq batch c h w
                 input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
                 infrastructure_metas = [sample.metainfo for sample in input_samples_inf] # batch
-                pts_feat_dict_inf = self.corr_model.extract_feat(
-                    input_dict_inf,
-                    infrastructure_metas,
-                    extract_level = 4,
-                    return_voxel_features = False,
-                    return_middle_features = False,
-                    return_backbone_features = False,
-                    return_neck_features = True) # FIXME 4 times
-                infrastructure_features = pts_feat_dict_inf['neck_features'] # B C H W
+                for i in range(present_idx+1):
+                    input_dict = example_seq[i][self.infrastructure_id]['inputs']
+                    pts_feat_dict_inf = self.corr_model.extract_feat(
+                                    input_dict,
+                                    extract_level = 2,
+                                    return_voxel_features = False,
+                                    return_middle_features = True,
+                                    return_backbone_features = False,
+                                    return_neck_features = False)
+                    inf_seq_middle_features.append(pts_feat_dict_inf['middle_features'])
+                inf_seq_middle_features = torch.cat(inf_seq_middle_features, dim=0) # seq*batch c h w
+                inf_seq_neck_features = self.corr_model.pts_neck(self.corr_model.pts_backbone(inf_seq_middle_features))[0] # seq*batch c h w
+                _, c, h, w = inf_seq_neck_features.shape
+                inf_seq_neck_features = inf_seq_neck_features.view(present_idx+1, -1, c, h, w).permute(1, 0, 2, 3, 4).contiguous() # batch seq c h w
+                infrastructure_features = [self.corr_model.temporal_neck(inf_seq_neck_features)] # batch c h w
+                # # infrastructure的所有输入
+                # input_dict_inf = present_seq[self.infrastructure_id]['inputs'] # voxel batch
+                # input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
+                # infrastructure_metas = [sample.metainfo for sample in input_samples_inf] # batch
+                # pts_feat_dict_inf = self.corr_model.extract_feat(
+                #     input_dict_inf,
+                #     infrastructure_metas,
+                #     extract_level = 4,
+                #     return_voxel_features = False,
+                #     return_middle_features = False,
+                #     return_backbone_features = False,
+                #     return_neck_features = True) # FIXME 4 times
+                # infrastructure_features = pts_feat_dict_inf['neck_features'] # B C H W
 
             # gt
             # coop targets
@@ -468,10 +487,10 @@ class EgoModel(MVXTwoStageDetector):
                 )
 
                 # #得到相关性heatmap 以此筛选出协调区域
-                # gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
-                # for idx in range(len(gt_corr_heatmaps)):
-                #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
-                # gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
+                gt_corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
+                for idx in range(len(gt_corr_heatmaps)):
+                    gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
+                gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 #     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx:self.ego_idx+1,:,:]
                 # corr_heatmaps_label, = self.corr_model.multi_task_head.corr_head.prepare_corr_heatmaps(
                 #     gt_corr_heatmaps
@@ -523,24 +542,24 @@ class EgoModel(MVXTwoStageDetector):
                 #     return []
                 # ################################ SHOW CORRELATION HEATMAP ################################
 
-                # pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # # corr_mask = gt_corr_heatmaps > self.corr_thresh
+                pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
                 # corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 # where2comm
-                det_heatmaps = []
-                for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
-                    pred_result = preds_dict[0]
-                    det_heatmaps.append(pred_result['heatmap'].sigmoid())
-                det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
-                det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
-                comm_mask = torch.where(
-                        det_heatmap > self.score_threshold,
-                        torch.ones_like(det_heatmap, device=get_device()),
-                        torch.zeros_like(det_heatmap, device=get_device()),
-                    ) # B 1 H W
-                comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
-                corr_mask = comm_mask > 0.00 #where2comm进行融合
+                # det_heatmaps = []
+                # for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                #     pred_result = preds_dict[0]
+                #     det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                # det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                # det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                # comm_mask = torch.where(
+                #         det_heatmap > self.score_threshold,
+                #         torch.ones_like(det_heatmap, device=get_device()),
+                #         torch.zeros_like(det_heatmap, device=get_device()),
+                #     ) # B 1 H W
+                # comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
+                # corr_mask = comm_mask > 0.00 #where2comm进行融合
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -592,9 +611,9 @@ class EgoModel(MVXTwoStageDetector):
                                 lidar_path = ego_metas[b]['lidar_path'], # type: ignore
                             )
                         )
-                        sample.gt_instances_3d = ego_instances[b] # type: ignore
+                        # sample.gt_instances_3d = ego_instances[b] # type: ignore
                         # sample.gt_instances_3d = coop_instances[b] # type: ignore
-                        # sample.gt_instances_3d = corr_instances[b] # type: ignore
+                        sample.gt_instances_3d = corr_instances[b] # type: ignore
 
                         sample.gt_instances_3d.pop('track_id') # no need array
                         sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
@@ -629,8 +648,8 @@ class EgoModel(MVXTwoStageDetector):
                     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                # corr_mask = gt_corr_heatmaps > self.corr_thresh
-                corr_mask = pred_corr_heatmap > self.corr_thresh
+                corr_mask = gt_corr_heatmaps > self.corr_thresh
+                # corr_mask = pred_corr_heatmap > self.corr_thresh
 
                 #计算corr_heatmap的IOU
                 # gt_mask = gt_corr_heatmaps > self.corr_thresh
