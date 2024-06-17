@@ -218,6 +218,7 @@ class EgoModel(MVXTwoStageDetector):
             # for samples in input_samples_inf:
             #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
             #     inf_coop_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+            # inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # old all targets
             # for b in range(batch_size):
             #     ego_track_id = ego_coop_instances[b].track_id
             #     # other visible 
@@ -309,6 +310,7 @@ class EgoModel(MVXTwoStageDetector):
             for samples in input_samples_inf:
                 valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
                 inf_coop_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+            # inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # old all targets
             for b in range(batch_size):
                 ego_track_id = ego_coop_instances[b].track_id
                 # other visible 
