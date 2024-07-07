@@ -49,7 +49,7 @@ class V2XTransformerFusion(BaseModule):
         attn = F.softmax(score, dim=-1)
         result = torch.bmm(attn, all_feats) #  N A+E C
         result = result[:,0:1,:].view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-        # result = result*corr_mask.float() + ego_feats*(~corr_mask).float()
+        result = result*corr_mask.float() + ego_feats*(~corr_mask).float()
         return result
 
         # B, C, H, W = ego_feats.shape

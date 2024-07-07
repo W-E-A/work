@@ -59,7 +59,7 @@ class EgoModel(MVXTwoStageDetector):
 
         if self.pts_train_cfg:
             self.train_mode = self.pts_train_cfg.get('train_mode', 'single') # type: ignore
-            assert self.train_mode in ('single', 'fusion')
+            assert self.train_mode in ('single', 'dense', 'where', 'gt_corr', 'pred_corr')
 
             if freeze_inf_model:
                 for shared_module_name in self.pts_train_cfg.get('shared_weights', []):
@@ -454,25 +454,28 @@ class EgoModel(MVXTwoStageDetector):
                 # else:
                 #     return []
                 # ################################ SHOW CORRELATION HEATMAP ################################
-
-                pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                corr_mask = gt_corr_heatmaps > self.corr_thresh
-                # corr_mask = pred_corr_heatmap > self.corr_thresh
-
-                #where2comm
-                # det_heatmaps = []
-                # for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
-                #     pred_result = preds_dict[0]
-                #     det_heatmaps.append(pred_result['heatmap'].sigmoid())
-                # det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
-                # det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
-                # comm_mask = torch.where(
-                #         det_heatmap > self.score_threshold,
-                #         torch.ones_like(det_heatmap, device=get_device()),
-                #         torch.zeros_like(det_heatmap, device=get_device()),
-                #     ) # B 1 H W
-                # comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
-                # corr_mask = comm_mask > 0.00 #where2comm进行融合
+                if self.train_mode == 'pred_corr':
+                    pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
+                    corr_mask = pred_corr_heatmap > self.corr_thresh
+                if self.train_mode == 'gt_corr':
+                    corr_mask = gt_corr_heatmaps > self.corr_thresh
+                if self.train_mode == 'where':
+                    # where2comm
+                    det_heatmaps = []
+                    for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                        pred_result = preds_dict[0]
+                        det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                    det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                    det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                    comm_mask = torch.where(
+                            det_heatmap > self.score_threshold,
+                            torch.ones_like(det_heatmap, device=get_device()),
+                            torch.zeros_like(det_heatmap, device=get_device()),
+                        ) # B 1 H W
+                    comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
+                    corr_mask = comm_mask > 0.00 #where2comm进行融合
+                if self.train_mode == 'dense':
+                    corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device())
 
                 #对路端特帧进行位姿变换
                 present_pose_matrix = []
@@ -534,6 +537,24 @@ class EgoModel(MVXTwoStageDetector):
                         # sample.gt_instances_3d.pop('correlations') # no need array
                         sample.pred_instances_3d = pred_result[b]
                         det_ret_list.append(sample)
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                # for idx, result in enumerate(det_ret_list):
+                #     visualizer.set_points_from_npz(result.lidar_path)
+                #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
+                #     # thres = self.score_threshold
+                #     thres = 0.3
+                #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
+                #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
+                #     visualizer.just_save(f'./data/vis/det_result/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+
+                # # import pdb
+                # # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
                 return det_ret_list
             else:
                 #prepare motion label
@@ -560,32 +581,36 @@ class EgoModel(MVXTwoStageDetector):
                 for idx in range(len(gt_corr_heatmaps)):
                     gt_corr_heatmaps[idx] = gt_corr_heatmaps[idx][self.ego_idx,:,:]
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
-                pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
-                corr_mask = gt_corr_heatmaps > self.corr_thresh
-                # corr_mask = pred_corr_heatmap > self.corr_thresh
-
-                #计算corr_heatmap的IOU
-                # gt_mask = gt_corr_heatmaps > self.corr_thresh
-                # pred_mask = pred_corr_heatmap > self.corr_thresh
-                # corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
-                # self.corr_iou += corr_iou.item()
-                # self.iou_count += 1
-                # print("corr_iou:",self.corr_iou / self.iou_count)
                 
-                #where2comm
-                # det_heatmaps = []
-                # for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
-                #     pred_result = preds_dict[0]
-                #     det_heatmaps.append(pred_result['heatmap'].sigmoid())
-                # det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
-                # det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
-                # comm_mask = torch.where(
-                #         det_heatmap > self.score_threshold,
-                #         torch.ones_like(det_heatmap, device=get_device()),
-                #         torch.zeros_like(det_heatmap, device=get_device()),
-                #     ) # B 1 H W
-                # comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
-                # corr_mask = comm_mask > 0.00 #where2comm进行融合
+                if self.train_mode == 'pred_corr':
+                    pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
+                    corr_mask = pred_corr_heatmap > self.corr_thresh
+                    #计算corr_heatmap的IOU
+                    gt_mask = gt_corr_heatmaps > self.corr_thresh
+                    pred_mask = pred_corr_heatmap > self.corr_thresh
+                    corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
+                    self.corr_iou += corr_iou.item()
+                    self.iou_count += 1
+                    print("corr_iou:",self.corr_iou / self.iou_count)
+                if self.train_mode == 'gt_corr':
+                    corr_mask = gt_corr_heatmaps > self.corr_thresh
+                if self.train_mode == 'where':
+                    # where2comm
+                    det_heatmaps = []
+                    for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                        pred_result = preds_dict[0]
+                        det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                    det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                    det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                    comm_mask = torch.where(
+                            det_heatmap > self.score_threshold,
+                            torch.ones_like(det_heatmap, device=get_device()),
+                            torch.zeros_like(det_heatmap, device=get_device()),
+                        ) # B 1 H W
+                    comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
+                    corr_mask = comm_mask > 0.00 #where2comm进行融合
+                if self.train_mode == 'dense':
+                    corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device())
 
 
                 #对路端特帧进行位姿变换
@@ -634,6 +659,24 @@ class EgoModel(MVXTwoStageDetector):
                         sample.gt_instances_3d.pop('coop_isvalid') # no need array
                         sample.pred_instances_3d = pred_result[b]
                         det_ret_list.append(sample)
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                # for idx, result in enumerate(det_ret_list):
+                #     visualizer.set_points_from_npz(result.lidar_path)
+                #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
+                #     # thres = self.score_threshold
+                #     thres = 0.3
+                #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
+                #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
+                #     visualizer.just_save(f'./data/vis/det_result_where/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+
+                # # import pdb
+                # # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
                 return det_ret_list
 
             
