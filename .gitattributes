@@ -1,0 +1,4 @@
+weights/big_gtv240529.pth filter=lfs diff=lfs merge=lfs -text
+weights/big_predv240602.pth filter=lfs diff=lfs merge=lfs -text
+weights/big_wherev240603.pth filter=lfs diff=lfs merge=lfs -text
+weights/infrav240511.pth filter=lfs diff=lfs merge=lfs -text
