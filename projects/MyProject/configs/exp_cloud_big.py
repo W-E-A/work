@@ -528,7 +528,6 @@ model = dict(
         type='GeneralDotProductAttention',
         query_size=128,
         key_size=128,
-        in_channels=sum([128, 128, 128]),
     ),
     # test_comm_expand_layer=dict(
     #     type='GaussianConv',

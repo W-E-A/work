@@ -86,12 +86,10 @@ class policy_net4(BaseModule):
 class GeneralDotProductAttention(BaseModule):
     ''' Scaled Dot-Product Attention '''
 
-    def __init__(self, query_size, key_size, in_channels, attn_dropout=0.1):
+    def __init__(self, query_size, key_size, attn_dropout=0.1):
         super().__init__()
-        self.in_channels = in_channels
         self.softmax = nn.Softmax(dim=1)
         self.linear = nn.Linear(query_size, key_size)
-        self.conv = conv2DBatchNormRelu(2*self.in_channels, self.in_channels, k_size=3, stride=1, padding=1)
         print('Msg size: ',query_size,'  Key size: ', key_size)
 
     def forward(self, q, k, v):
@@ -102,9 +100,6 @@ class GeneralDotProductAttention(BaseModule):
         attn_orig = torch.bmm(k, query.transpose(2, 1))  # (batch,2,1)
         attn_orig = self.softmax(attn_orig)  # (batch,2,1)
         attn = torch.unsqueeze(torch.unsqueeze(attn_orig, 3), 4)  # (batch,2,1,1,1)
-        print("attn:",attn.shape)
-        print("v:",v.shape)
         output = attn * v  # (batch,2,channel,size,size)
         output = output.sum(1)  # (batch,1,channel,size,size)
-        output = self.conv(output)
         return output
