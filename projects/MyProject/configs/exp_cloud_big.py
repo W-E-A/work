@@ -76,7 +76,7 @@ train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大h
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-train_mode = 'pred_corr' #'single','where', 'gt_corr', 'pred_corr', 'dense'
+train_mode = 'when' #'single','where', 'gt_corr', 'pred_corr', 'dense', 'when'
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
 ego_name = 'ego_vehicle'
@@ -514,6 +514,21 @@ model = dict(
         kernel_size=train_comm_ksize,
         sigma=1.0,
         impl=True,
+    ),
+    policy_net4=dict(
+        type='policy_net4',
+        in_channels=384,
+    ),
+    linear=dict(
+        type='linear',
+        in_channels = 128,
+        input_feat_sz=256,
+    ),
+    when_fusion_layer=dict(
+        type='GeneralDotProductAttention',
+        query_size=128,
+        key_size=128,
+        in_channels=sum([128, 128, 128]),
     ),
     # test_comm_expand_layer=dict(
     #     type='GaussianConv',

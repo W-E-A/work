@@ -122,7 +122,6 @@ TODO
 temp.py
 
 # Pytorch
-*.pth
 
 # demo
 *.jpg
