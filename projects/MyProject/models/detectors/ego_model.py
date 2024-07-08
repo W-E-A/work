@@ -474,7 +474,6 @@ class EgoModel(MVXTwoStageDetector):
                     unified_feat_map = torch.cat((ego_features[0],warp_infra_feat),0)
                     query_key_map = self.query_key_net(unified_feat_map)
                     query_key_map_ego = query_key_map[0:batch_size * 1]
-                    query_key_map_infra = query_key_map[batch_size * 1:batch_size * 2]
                     query = torch.unsqueeze(self.query_net(query_key_map_ego), 1)
                     keys = self.key_net(query_key_map)
                     key_ego = torch.unsqueeze(keys[0:batch_size * 1], 1)
