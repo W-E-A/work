@@ -471,6 +471,8 @@ class EgoModel(MVXTwoStageDetector):
                 infrastructure_feature = infrastructure_features[0] # C, H, W
                 warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
                 if self.train_mode == 'when':
+                    warp_corr_mask = []
+                    _,_,H,W = warp_infra_feat.shape
                     unified_feat_map = torch.cat((ego_features[0],warp_infra_feat),0)
                     query_key_map = self.query_key_net(unified_feat_map)
                     query_key_map_ego = query_key_map[0:batch_size * 1]
@@ -479,8 +481,17 @@ class EgoModel(MVXTwoStageDetector):
                     key_ego = torch.unsqueeze(keys[0:batch_size * 1], 1)
                     key_infra = torch.unsqueeze(keys[batch_size * 1:batch_size * 2], 1)
                     keys = torch.cat((key_ego, key_infra), 1)
-                    vals = torch.cat((ego_features[0].unsqueeze(1), warp_infra_feat.unsqueeze(1)), 1)
-                    ego_fusion_result = self.attention_net(query, keys, vals)
+                    atten = self.attention_net(query, keys).squeeze(-1)
+                    for b in range(batch_size):
+                        if atten[b][1]>0.5:
+                            warp_corr_mask.append(torch.ones(1, H, W))
+                        else:
+                            warp_corr_mask.append(torch.zeros(1, H, W))
+                    warp_corr_mask = torch.cat(warp_corr_mask,dim=0).unsqueeze(1).to(get_device()).bool()
+                    # vals = torch.cat((ego_features[0].unsqueeze(1), warp_infra_feat.unsqueeze(1)), 1)
+                    # ego_fusion_result = self.attention_net(query, keys, vals)
+                elif self.train_mode == 'dense':
+                    warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
                 else:
                     if self.train_mode == 'pred_corr':
                         pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
@@ -502,12 +513,9 @@ class EgoModel(MVXTwoStageDetector):
                             ) # B 1 H W
                         comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
                         corr_mask = comm_mask > 0.00 #where2comm进行融合
-                    if self.train_mode == 'dense':
-                        corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device())
-
-                    #融合
                     warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
-                    ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
+                #融合
+                ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
 
                 #fusion det loss
                 det_forward_kwargs = {}
@@ -610,6 +618,8 @@ class EgoModel(MVXTwoStageDetector):
                 infrastructure_feature = infrastructure_features[0] # C, H, W
                 warp_infra_feat = warp_features(infrastructure_feature, present_pose_matrix, self.warp_size) #B C H W
                 if self.train_mode == 'when':
+                    warp_corr_mask = []
+                    _,_,H,W = warp_infra_feat.shape
                     unified_feat_map = torch.cat((ego_features[0],warp_infra_feat),0)
                     query_key_map = self.query_key_net(unified_feat_map)
                     query_key_map_ego = query_key_map[0:batch_size * 1]
@@ -618,8 +628,17 @@ class EgoModel(MVXTwoStageDetector):
                     key_ego = torch.unsqueeze(keys[0:batch_size * 1], 1)
                     key_infra = torch.unsqueeze(keys[batch_size * 1:batch_size * 2], 1)
                     keys = torch.cat((key_ego, key_infra), 1)
-                    vals = torch.cat((ego_features[0].unsqueeze(1), warp_infra_feat.unsqueeze(1)), 1)
-                    ego_fusion_result = self.attention_net(query, keys, vals)
+                    atten = self.attention_net(query, keys).squeeze(-1)
+                    for b in range(batch_size):
+                        if atten[b][1]>0.5:
+                            warp_corr_mask.append(torch.ones(1, H, W))
+                        else:
+                            warp_corr_mask.append(torch.zeros(1, H, W))
+                    warp_corr_mask = torch.cat(warp_corr_mask,dim=0).unsqueeze(1).to(get_device()).bool()
+                    # vals = torch.cat((ego_features[0].unsqueeze(1), warp_infra_feat.unsqueeze(1)), 1)
+                    # ego_fusion_result = self.attention_net(query, keys, vals)
+                elif self.train_mode == 'dense':
+                    warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
                 else:
                     if self.train_mode == 'pred_corr':
                         pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
@@ -648,17 +667,14 @@ class EgoModel(MVXTwoStageDetector):
                             ) # B 1 H W
                         comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
                         corr_mask = comm_mask > 0.00 #where2comm进行融合
-                    if self.train_mode == 'dense':
-                        corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device())
- 
                     warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
-                    #计算通信量
-                    rate = torch.sum(warp_corr_mask[0] > 0.5) / warp_corr_mask[0].numel()
-                    self.comm_rate += rate.item()
-                    self.comm_count += 1
-                    print("comm_rate:", self.comm_rate / self.comm_count)
-                    #融合
-                    ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
+                #计算通信量
+                rate = torch.sum(warp_corr_mask[0] > 0.5) / warp_corr_mask[0].numel()
+                self.comm_rate += rate.item()
+                self.comm_count += 1
+                print("comm_rate:", self.comm_rate / self.comm_count)
+                #融合
+                ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
 
 
                 ego_feat_dict = self.multi_task_head(ego_fusion_result,det_forward_kwargs=det_forward_kwargs)

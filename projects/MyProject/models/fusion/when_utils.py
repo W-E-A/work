@@ -92,14 +92,15 @@ class GeneralDotProductAttention(BaseModule):
         self.linear = nn.Linear(query_size, key_size)
         print('Msg size: ',query_size,'  Key size: ', key_size)
 
-    def forward(self, q, k, v):
+    def forward(self, q, k, v=None):
         # q (batch,1,128)
         # k (batch,2,128)
         # v (batch,2,channel*size*size)
         query = self.linear(q)  # (batch,1,key_size)
         attn_orig = torch.bmm(k, query.transpose(2, 1))  # (batch,2,1)
         attn_orig = self.softmax(attn_orig)  # (batch,2,1)
-        attn = torch.unsqueeze(torch.unsqueeze(attn_orig, 3), 4)  # (batch,2,1,1,1)
-        output = attn * v  # (batch,2,channel,size,size)
-        output = output.sum(1)  # (batch,1,channel,size,size)
-        return output
+        # attn = torch.unsqueeze(torch.unsqueeze(attn_orig, 3), 4)  # (batch,2,1,1,1)
+        # output = attn * v  # (batch,2,channel,size,size)
+        # output = output.sum(1)  # (batch,1,channel,size,size)
+        # return output
+        return attn_orig
