@@ -70,7 +70,7 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 1 if debug else 2 # CLOUD
+batch_size = 1 if debug else 1 # CLOUD
 num_workers = 1 if debug else 4 # CLOUD
 seq_length = 8
 present_idx = 2
@@ -507,6 +507,7 @@ model = dict(
     ),
     pts_test_cfg=dict(
         # det
+        corr_thresh=0.2,
         nms_type='rotate',
         post_center_limit_range=det_center_range,
         score_threshold=0.1,

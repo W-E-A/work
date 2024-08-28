@@ -482,8 +482,9 @@ class EgoModel(MVXTwoStageDetector):
                     key_infra = torch.unsqueeze(keys[batch_size * 1:batch_size * 2], 1)
                     keys = torch.cat((key_ego, key_infra), 1)
                     atten = self.attention_net(query, keys).squeeze(-1)
+                    atten_thresh = 0.5
                     for b in range(batch_size):
-                        if atten[b][1]>0.5:
+                        if atten[b][1]>atten_thresh:
                             warp_corr_mask.append(torch.ones(1, H, W))
                         else:
                             warp_corr_mask.append(torch.zeros(1, H, W))
@@ -629,8 +630,9 @@ class EgoModel(MVXTwoStageDetector):
                     key_infra = torch.unsqueeze(keys[batch_size * 1:batch_size * 2], 1)
                     keys = torch.cat((key_ego, key_infra), 1)
                     atten = self.attention_net(query, keys).squeeze(-1)
+                    atten_thresh = 0.5
                     for b in range(batch_size):
-                        if atten[b][1]>0.5:
+                        if atten[b][1]>atten_thresh:
                             warp_corr_mask.append(torch.ones(1, H, W))
                         else:
                             warp_corr_mask.append(torch.zeros(1, H, W))
