@@ -862,27 +862,27 @@ class CorrGenerateHead(BaseModule):
 
         # import pdb;pdb.set_trace()
 
-        for name, pred_result, heatmap, gt_mask, dilate_heatmap, pos_num in zip(names, preds_list, heatmaps, gt_masks, dilate_heatmaps, corr_pos_nums):
-            pred_result = pred_result[0]
-            pred_heatmap = clip_sigmoid(pred_result['heatmap']) # b, 1, h, w
-            loss_heatmap = self.heatmap_criterion(
-                pred_heatmap, # b, 1, h, w
-                heatmap, # b, 1, h, w
-                gt_mask, # b, 1, h, w
-                dilate_heatmap, # b, 1, h, w
-                pos_num, # b, 1
-            )
-            loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
+        # for name, pred_result, heatmap, gt_mask, dilate_heatmap, pos_num in zip(names, preds_list, heatmaps, gt_masks, dilate_heatmaps, corr_pos_nums):
+        #     pred_result = pred_result[0]
+        #     pred_heatmap = clip_sigmoid(pred_result['heatmap']) # b, 1, h, w
+        #     loss_heatmap = self.heatmap_criterion(
+        #         pred_heatmap, # b, 1, h, w
+        #         heatmap, # b, 1, h, w
+        #         gt_mask, # b, 1, h, w
+        #         dilate_heatmap, # b, 1, h, w
+        #         pos_num, # b, 1
+        #     )
+        #     loss_dict[f'{name}.loss_corr_heatmap'] = loss_heatmap
 
-        # pred_heatmap = torch.stack([clip_sigmoid(v[0]['heatmap']) for v in preds_list], dim=0)
-        # loss_heatmap = self.heatmap_criterion(
-        #     pred_heatmap, # c-1, b, 1, h, w
-        #     heatmaps, # c-1, b, 1, h, w
-        #     gt_masks, # c-1, b, 1, h, w
-        #     dilate_heatmaps, # c-1, b, 1, h, w
-        #     corr_pos_nums,
-        # )
-        # loss_dict[f'loss_corr_heatmap'] = loss_heatmap
+        pred_heatmap = torch.stack([clip_sigmoid(v[0]['heatmap']) for v in preds_list], dim=0)
+        loss_heatmap = self.heatmap_criterion(
+            pred_heatmap, # c-1, b, 1, h, w
+            heatmaps, # c-1, b, 1, h, w
+            gt_masks, # c-1, b, 1, h, w
+            dilate_heatmaps, # c-1, b, 1, h, w
+            corr_pos_nums,
+        )
+        loss_dict[f'loss_corr_heatmap'] = loss_heatmap
 
         return loss_dict
 
