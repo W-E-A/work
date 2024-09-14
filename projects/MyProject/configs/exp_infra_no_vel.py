@@ -51,11 +51,12 @@ det_voxel_size = [voxel_size[0] * det_out_factor, voxel_size[1] * det_out_factor
 corr_voxel_size = [voxel_size[0] * corr_out_factor, voxel_size[1] * corr_out_factor, voxel_size[2]]
 motion_voxel_size = [voxel_size[0] * motion_out_factor, voxel_size[1] * motion_out_factor, voxel_size[2]]
 
-det_with_velocity = True
-code_size = 9
-# code_size = 7
-code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
-# code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+det_with_velocity = False
+corr_with_velocity = True
+# code_size = 9
+# code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+code_size = 7
+code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 det_tasks = [
     dict(num_class=1, class_names=['car']),
     dict(num_class=2, class_names=['van', 'truck']),
@@ -67,25 +68,27 @@ det_common_heads = dict(
     height=(1, 2),
     dim=(3, 2),
     rot=(2, 2),
-    vel=(2, 2),
+    # vel=(2, 2),
 )
 
-batch_size = 1 if debug else 4 # CLOUD
+batch_size = 1 if debug else 2 # CLOUD
 num_workers = 1 if debug else 4 # CLOUD
-train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-train_mode = 'dense' #'single','where', 'gt_corr', 'pred_corr', 'dense', 'when'
+# sample_agents = (
+#     'ego_vehicle', 'infrastructure',
+# )
+# sample_agents = (
+#     'ego_vehicle', 'other_vehicle', 'infrastructure',
+# )
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
-ego_name = 'ego_vehicle'
-motion_only_vehicle = False
-motion_filter_invalid = False
-corr_only_vehicle = False
-corr_filter_invalid = False
+motion_only_vehicle = True
+motion_filter_invalid = True
+corr_only_vehicle = True
+corr_filter_invalid = True
 vehicle_id_list = [0, 1, 2] # agents 'car', 'van', 'truck'
-shared_weights = ['corr_model']
 
 train_pipline = [
     dict(
@@ -178,7 +181,7 @@ train_scene_pipline = [
         pc_range = lidar_range,
         voxel_size = voxel_size,
         infrastructure_name = infrastructure_name,
-        with_velocity = det_with_velocity,
+        with_velocity = corr_with_velocity,
         ego_id = -100,
         min_distance_thres = 5,
         max_distance_thres = 20,
@@ -195,6 +198,7 @@ train_scene_pipline = [
         pc_range_lidar = lidar_range,
         voxel_size_lidar = corr_voxel_size,
         infrastructure_name = infrastructure_name,
+        generate_corr_heatmap = True,
         just_present = False,
         ego_id = -100,
         motion_only_vehicle = motion_only_vehicle,
@@ -220,7 +224,7 @@ test_scene_pipline = [
         pc_range = lidar_range,
         voxel_size = voxel_size,
         infrastructure_name = infrastructure_name,
-        with_velocity = det_with_velocity,
+        with_velocity = corr_with_velocity,
         ego_id = -100,
         min_distance_thres = 5,
         max_distance_thres = 20,
@@ -237,6 +241,7 @@ test_scene_pipline = [
         pc_range_lidar = lidar_range,
         voxel_size_lidar = corr_voxel_size,
         infrastructure_name = infrastructure_name,
+        generate_corr_heatmap = True,
         just_present = False,
         ego_id = -100,
         motion_only_vehicle = motion_only_vehicle,
@@ -317,140 +322,8 @@ test_evaluator = dict(
     with_velocity=det_with_velocity,
 )
 
-corr_model = dict(
-    type='CorrelationModel',
-    init_cfg=dict(type='Pretrained', 
-    checkpoint='/home/wangyichen/deepaccident/weights/infrav240511.pth'),
-    pts_voxel_encoder = dict(
-        type = 'PillarFeatureNet',
-        in_channels = 5 if use_multi_sweeps else 4,
-        feat_channels = (64, ),
-        with_distance = False,
-        with_cluster_center = True,
-        with_voxel_center = True,
-        voxel_size = voxel_size,
-        point_cloud_range = tuple(lidar_range),
-        norm_cfg = dict(
-            type = 'BN1d',
-            eps = 1e-3,
-            momentum = 0.01),
-        mode = 'max',
-        legacy = False
-    ),
-    pts_middle_encoder=dict(
-        type = 'PointPillarsScatterWrapper',
-        in_channels = 64,
-        lidar_range = lidar_range,
-        voxel_size = voxel_size
-    ),
-    pts_backbone=dict(
-        type='SECOND',
-        in_channels=64,
-        out_channels=[64, 128, 256],
-        layer_nums=[3, 5, 5],
-        layer_strides=[2, 2, 2],
-        norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
-        conv_cfg=dict(type='Conv2d', bias=False)
-    ),
-    pts_neck=dict(
-        type='SECONDFPN',
-        in_channels=[64, 128, 256],
-        out_channels=[128, 128, 128],
-        upsample_strides=[0.5, 1, 2],
-        norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
-        upsample_cfg=dict(type='deconv', bias=False),
-        use_conv_for_no_stride=True
-    ),
-    multi_task_head=dict(
-        type='MTHead',
-        det_head=dict(
-            type='CenterHeadModified',
-            in_channels=sum([128, 128, 128]),
-            tasks=det_tasks,
-            bbox_coder=dict(
-                type='CenterPointBBoxCoder',
-                post_center_range=det_center_range,
-                max_num=500,
-                score_threshold=0.1,
-                out_size_factor=det_out_factor,
-                voxel_size=voxel_size[:2],
-                pc_range=lidar_range[:2],
-                code_size=code_size),
-            common_heads=det_common_heads,
-            loss_cls=dict(type='mmdet.GaussianFocalLoss', reduction='mean'),
-            loss_bbox=dict(type='mmdet.L1Loss', reduction='mean', loss_weight=0.25),
-            separate_head=dict(
-                type='SeparateHead',
-                head_conv=64,
-                init_bias=-2.19,
-                final_kernel=3
-            ),
-            share_conv_channel=64,
-            num_heatmap_convs=2,
-            norm_bbox=True,
-            with_velocity=det_with_velocity,
-        ),
-        motion_head=dict(
-            type='IterativeFlow',
-            task_dict={
-                'segmentation': 2,
-                'instance_center': 1,
-                'instance_offset': 2,
-                'instance_flow': 2,
-            },
-            distribution_log_sigmas=[-5.0, 5.0],
-            class_weights=[1.0, 2.0],
-            in_channels=128,
-            feat_channel=384,
-            prob_latent_dim=32,
-            receptive_field=3,
-            n_future=5,
-            grid_conf = [lidar_range, det_voxel_size],
-            new_grid_conf = [motion_range, motion_voxel_size],
-            using_spatial_prob=True,
-            using_focal_loss=True,
-            n_gru_blocks=1,
-            future_discount=1,
-            loss_weights={
-                'loss_motion_seg': 5.0,
-                'loss_motion_centerness': 1.0,
-                'loss_motion_offset': 1.0,
-                'loss_motion_flow': 1.0,
-                'loss_motion_prob': 10.0,
-            },
-            sample_ignore_mode='past_valid',
-            posterior_with_label=False,
-        ),
-        corr_head=dict(
-            type='CorrGenerateHead',
-            pc_range=lidar_range,
-            voxel_size=corr_voxel_size,
-            n_future_and_present=seq_length - present_idx, # future and present
-            label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
-            in_channels=sum([128, 128, 128]),
-            loss_cfg=dict(
-                type='CorrelationLoss',
-                # gamma=2.0,
-                # smooth_beta=0.5,
-                pos_weight=1.0,
-                neg_weight=1.0,
-            ),
-            separate_head=dict(
-                type='SeparateHead',
-                head_conv=64,
-                init_bias=-2.19,
-                final_kernel=3
-            ),
-            share_conv_channel=64,
-            num_heatmap_convs=2,
-        ),
-    ),
-)
-
 model = dict(
-    type='EgoModel',
-    corr_model = corr_model,
-    freeze_inf_model = True,
+    type='CorrelationModel',
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
         delete_pointcloud=delete_pointcloud,
@@ -483,7 +356,7 @@ model = dict(
         in_channels = 64,
         lidar_range = lidar_range,
         voxel_size = voxel_size
-    ),
+    ), # B, 64, 1024, 1024
     pts_backbone=dict(
         type='SECOND',
         in_channels=64,
@@ -492,7 +365,7 @@ model = dict(
         layer_strides=[2, 2, 2],
         norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
         conv_cfg=dict(type='Conv2d', bias=False)
-    ),
+    ), # B, 64, 512, 512  B, 128, 256, 256  B, 256, 128, 128
     pts_neck=dict(
         type='SECONDFPN',
         in_channels=[64, 128, 256],
@@ -501,34 +374,20 @@ model = dict(
         norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
         upsample_cfg=dict(type='deconv', bias=False),
         use_conv_for_no_stride=True
-    ),
-    pts_fusion_layer=dict(
-        type='V2XTransformerFusion',
-        in_channels=sum([128, 128, 128]),
-        n_head=3,
-        mid_channels=256,
-        dense_fusion=True,
-    ),
-    train_comm_expand_layer=dict(
-        type='GaussianConv',
-        kernel_size=train_comm_ksize,
-        sigma=1.0,
-        impl=True,
-    ),
-    policy_net4=dict(
-        type='policy_net4',
-        in_channels=384,
-    ),
-    linear=dict(
-        type='linear',
-        in_channels = 128,
-        input_feat_sz=256,
-    ),
-    when_fusion_layer=dict(
-        type='GeneralDotProductAttention',
-        query_size=128,
-        key_size=128,
-    ),
+    ), # B, 384, 256, 256
+    # pts_fusion_layer=dict(
+    #     type='V2XTransformerFusion',
+    #     in_channels=sum([128, 128, 128]),
+    #     n_head=3,
+    #     mid_channels=256,
+    #     dense_fusion=True,
+    # ),
+    # train_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=train_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
     # test_comm_expand_layer=dict(
     #     type='GaussianConv',
     #     kernel_size=test_comm_ksize,
@@ -568,8 +427,65 @@ model = dict(
             norm_bbox=True,
             with_velocity=det_with_velocity,
         ),
+        motion_head=dict(
+            type='IterativeFlow',
+            task_dict={
+                'segmentation': 2,
+                'instance_center': 1,
+                'instance_offset': 2,
+                'instance_flow': 2,
+            },
+            distribution_log_sigmas=[-5.0, 5.0],
+            class_weights=[1.0, 2.0],
+            in_channels=128, # after channel shrink
+            feat_channel=384,
+            prob_latent_dim=32,
+            receptive_field=present_idx+1,
+            n_future=seq_length-present_idx-1,
+            grid_conf = [lidar_range, det_voxel_size],
+            new_grid_conf = [motion_range, motion_voxel_size],
+            using_spatial_prob=True,
+            using_focal_loss=True,
+            n_gru_blocks=1,
+            future_discount=1,
+            loss_weights={
+                'loss_motion_seg': 5.0,
+                'loss_motion_centerness': 1.0,
+                'loss_motion_offset': 1.0,
+                'loss_motion_flow': 1.0,
+                'loss_motion_prob': 10.0,
+            },
+            sample_ignore_mode='past_valid',
+            posterior_with_label=False,
+        ),
+        corr_head=dict(
+            type='CorrGenerateHead',
+            pc_range=lidar_range,
+            voxel_size=corr_voxel_size,
+            n_future_and_present=seq_length - present_idx, # future and present
+            label_size=1+1+2+2, # segmentation ,instance_center, instance_offset, instance_flow
+            in_channels=sum([128, 128, 128]),
+            loss_cfg=dict(
+                type='CorrelationLoss',
+                focal_gamma=2.0,
+                gaussian_gamma=1.0,
+                # pos_weight=1.0,
+                # neg_weight=1.0,
+                pos_weight=0.25,
+                neg_weight=0.75,
+            ),
+            separate_head=dict(
+                type='SeparateHead',
+                head_conv=64,
+                init_bias=-2.19,
+                final_kernel=3
+            ),
+            share_conv_channel=64,
+            num_heatmap_convs=2,
+        ),
     ),
     pts_train_cfg=dict(
+        # det
         voxel_size=voxel_size,
         point_cloud_range=lidar_range,
         out_size_factor=det_out_factor,
@@ -578,10 +494,21 @@ model = dict(
         max_objs=500,
         min_radius=2,
         code_weights=code_weights, # code_size
-        train_mode=train_mode,
-        shared_weights=shared_weights,
+        # corr det
+        corr_dense_reg=1,
+        corr_max_objs=500,
+        corr_gaussian_overlap=0.5,
+        corr_min_radius=2,
+        # loss
+        task_weight=dict(
+            det=1.0,
+            motion=1.0,
+            corr=1.0
+        ),
     ),
     pts_test_cfg=dict(
+        # det
+        corr_thresh=0.2,
         nms_type='rotate',
         post_center_limit_range=det_center_range,
         score_threshold=0.1,
@@ -593,17 +520,11 @@ model = dict(
         max_pool_nms=False,
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
     ),
-    pts_fusion_cfg=dict(
-        corr_thresh = 0.1,
-        pc_range = lidar_range,
-    ),
     co_cfg=dict(
-        infrastructure_name = infrastructure_name,
-        ego_name = ego_name
+        # corr
+        infrastructure_name=infrastructure_name
     )
 )
-
-
 
 lr = 1 * 1e-4
 checkpoint_interval = 2

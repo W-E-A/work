@@ -10,12 +10,12 @@ if debug:
     
     if use_multi_sweeps:
         # debug with multi sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
+        train_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident_ms_debug/deepaccident_infos_val.pkl'
     else:
         # debug no sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
+        train_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident_debug/deepaccident_infos_train.pkl'
+        val_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident_debug/deepaccident_infos_val.pkl'
 
     delete_pointcloud = False
 
@@ -23,12 +23,12 @@ else:
     
     if use_multi_sweeps:
         # full with multi sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
+        train_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident_ms/deepaccident_infos_train.pkl'
+        val_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident_ms/deepaccident_infos_val.pkl'
     else:
         # full no sweeps
-        train_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
-        val_annfile_path = '/mnt/auto-labeling/wyc/wea_work/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
+        train_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident/deepaccident_infos_train.pkl'
+        val_annfile_path = '/home/wangyichen/deepaccident/data/deepaccident/deepaccident_infos_val.pkl'
 
     delete_pointcloud = True
 
@@ -70,7 +70,7 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 1 if debug else 1 # CLOUD
+batch_size = 1 if debug else 2 # CLOUD
 num_workers = 1 if debug else 4 # CLOUD
 seq_length = 8
 present_idx = 2
@@ -544,7 +544,7 @@ default_hooks = dict(
                 checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
 custom_hooks = [] if debug else [
-    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/mnt/infra_dataset_ssd/ad_infra_dataset_pilot_fusion/checkpoints/gpu_messages')
+    dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/home/wangyichen/gpu_messages')
 ]# CLOUD
 
 env_cfg = dict(

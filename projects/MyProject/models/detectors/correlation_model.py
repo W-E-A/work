@@ -63,6 +63,7 @@ class CorrelationModel(MVXTwoStageDetector):
         if self.co_cfg:
             self.infrastructure_name = self.co_cfg.get('infrastructure_name', 'infrastructure')
         self.corr_iou = 0.0
+        self.iou_error = 0.0
         self.iou_count = 0
 
     def extract_pts_feat(
@@ -249,7 +250,8 @@ class CorrelationModel(MVXTwoStageDetector):
             infrastructure_label = present_seq[self.infrastructure_id]['inf_motion_label'] # motion_label also for ego single
             ego_motion_labels = [present_seq[ego_id]['ego_motion_label'] for ego_id in ego_ids]
 
-            infrastructure_label, infrastructure_input = self.multi_task_head.motion_head.prepare_future_labels(infrastructure_label)
+            if self.multi_task_head.motion_head is not None:
+                infrastructure_label, infrastructure_input = self.multi_task_head.motion_head.prepare_future_labels(infrastructure_label)
             ego_motion_labels, ego_motion_inputs = self.multi_task_head.corr_head.prepare_ego_labels(ego_motion_labels)
 
             ################################ SHOW MOTION LABEL ################################
@@ -268,10 +270,13 @@ class CorrelationModel(MVXTwoStageDetector):
             ################################ SHOW MOTION LABEL ################################
 
             det_forward_kwargs = {}
-            motion_forward_kwargs = {
-                'future_distribution_inputs':infrastructure_input,
-                'noise':None
-            }
+            if self.multi_task_head.motion_head is not None:
+                motion_forward_kwargs = {
+                    'future_distribution_inputs':infrastructure_input,
+                    'noise':None
+                }
+            else:
+                motion_forward_kwargs = {}
             corr_forward_kwargs = {
                 'ego_motion_inputs':ego_motion_inputs
             }
@@ -290,9 +295,12 @@ class CorrelationModel(MVXTwoStageDetector):
                 'inds':inds,# necessary
                 'masks':masks,# necessary
             }
-            motion_loss_kwargs = {
-                'training_labels':infrastructure_label # necessary
-            }
+            if self.multi_task_head.motion_head is not None:
+                motion_loss_kwargs = {
+                    'training_labels':infrastructure_label # necessary
+                }
+            else:
+                motion_loss_kwargs = {}
             # corr_heatmaps = self.multi_task_head.corr_head.get_corr_heatmaps(infrastructure_instances)
             corr_heatmaps = present_seq[self.infrastructure_id]['corr_heatmaps']
             corr_gt_masks = present_seq[self.infrastructure_id]['corr_gt_masks']
@@ -496,12 +504,15 @@ class CorrelationModel(MVXTwoStageDetector):
                 gt_corr_heatmaps = torch.stack(gt_corr_heatmaps, dim=0).unsqueeze(1)
                 pred_corr_heatmaps = predict_dict['corr_pred'][0]
                 #计算corr_heatmap的IOU
-                gt_mask = gt_corr_heatmaps > self.corr_thresh
-                pred_mask = pred_corr_heatmaps > self.corr_thresh
+                gt_mask = gt_corr_heatmaps > 0.0
+                pred_mask = pred_corr_heatmaps > 0.1
                 corr_iou = (gt_mask & pred_mask).float().sum()/(gt_mask | pred_mask).float().sum()
+                iou_error = (pred_mask.float().sum() - (gt_mask & pred_mask).float().sum()) / gt_mask.float().sum()
                 self.corr_iou += corr_iou.item()
+                self.iou_error += iou_error.item()
                 self.iou_count += 1
                 print("corr_miou:",self.corr_iou / self.iou_count)
+                print("iou_error:",self.iou_error / self.iou_count)
                 ################################ SHOW CORRELATION HEATMAP ################################
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, name in enumerate(ego_names):
