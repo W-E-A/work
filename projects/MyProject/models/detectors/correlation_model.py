@@ -277,10 +277,12 @@ class CorrelationModel(MVXTwoStageDetector):
                 }
             else:
                 motion_forward_kwargs = {}
-            corr_forward_kwargs = {
-                'ego_motion_inputs':ego_motion_inputs
-            }
-
+            if self.multi_task_head.corr_head.add_channels != 0:
+                corr_forward_kwargs = {
+                    'ego_motion_inputs':ego_motion_inputs
+                }
+            else:
+                corr_forward_kwargs = {}
             infrastructure_feat_dict = self.multi_task_head(
                 infrastructure_features,
                 det_forward_kwargs=det_forward_kwargs,
@@ -408,9 +410,12 @@ class CorrelationModel(MVXTwoStageDetector):
                 'future_distribution_inputs':None,
                 'noise':None
             }
-            corr_forward_kwargs = {
-                'ego_motion_inputs':ego_motion_inputs
-            }
+            if self.multi_task_head.corr_head.add_channels != 0:
+                corr_forward_kwargs = {
+                    'ego_motion_inputs':ego_motion_inputs
+                }
+            else:
+                corr_forward_kwargs = {}
 
             infrastructure_feat_dict = self.multi_task_head(
                 infrastructure_features,
@@ -516,7 +521,7 @@ class CorrelationModel(MVXTwoStageDetector):
                 ################################ SHOW CORRELATION HEATMAP ################################
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, name in enumerate(ego_names):
-                #     maps = corr_heatmaps[idx][0]
+                #     maps = pred_corr_heatmaps[idx]
                 #     # thres = 0.25
                 #     # maps[maps<thres] = 0
                 #     visualizer.draw_featmap(maps)
