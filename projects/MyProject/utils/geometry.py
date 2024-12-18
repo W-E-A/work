@@ -288,3 +288,48 @@ def cumulative_warp_features_reverse(x, flow, spatial_extent, mode='nearest', be
             mode=mode))
 
     return torch.stack(out, 1)
+
+def transform_boxes_with_rotation_and_velocity(box, transform_matrix):
+    """
+    使用齐次变换矩阵对box的中心坐标、旋转角度rot和速度向量vx, vy进行变换。
+
+    参数:
+        box: Tensor [batch, N, 9]，box数据，包含x, y, z, l, w, h, rot, vx, vy
+        transform_matrix: Tensor [batch, 4, 4]，齐次变换矩阵
+
+    返回:
+        transformed_box: Tensor [batch, N, 9]，变换后的box
+    """
+    # Step 1: 提取并变换中心坐标 x, y, z
+    centers = box[:, :3]  # [N, 3]
+    ones = torch.ones_like(centers[..., :1])  # [N, 1]
+    centers_homo = torch.cat([centers, ones], dim=-1)  # [N, 4]
+    transformed_centers_homo = torch.matmul(transform_matrix.unsqueeze(0), centers_homo.unsqueeze(-1))
+    transformed_centers = transformed_centers_homo.squeeze(-1)[..., :3]  # [N, 3]
+
+    # Step 2: 提取旋转矩阵 R（3x3 的部分）
+    R = transform_matrix[:3, :3]  # [3, 3]
+
+    # Step 3: 变换旋转角度 rot
+    # 原始方向向量 (cos(rot), sin(rot), 0)
+    rot = box[:, 6]  # [N]
+    cos_rot = torch.cos(rot)
+    sin_rot = torch.sin(rot)
+    directions = torch.stack([cos_rot, sin_rot, torch.zeros_like(cos_rot)], dim=-1)  # [N, 3]
+
+    # 通过 R 变换方向向量
+    transformed_directions = torch.matmul(R.unsqueeze(0), directions.unsqueeze(-1)).squeeze(-1)  # [N, 3]
+    transformed_rot = torch.atan2(transformed_directions[:, 1], transformed_directions[:, 0])  # 重新计算角度
+
+    # Step 4: 变换速度向量 vx, vy
+    velocities = box[:, 7:9]  # [N, 2]，提取 vx, vy
+    R_2x2 = R[:2, :2]  # 提取旋转矩阵的 2x2 部分
+    transformed_velocities = torch.matmul(R_2x2.unsqueeze(0), velocities.unsqueeze(-1)).squeeze(-1)  # [N, 2]
+
+    # Step 5: 更新 box 并返回
+    transformed_box = box.clone()
+    transformed_box[:, :2] = transformed_centers[:,:2]          # 更新中心坐标
+    transformed_box[:, 6] = transformed_rot              # 更新旋转角度 rot
+    transformed_box[:, 7:9] = transformed_velocities     # 更新速度向量 vx, vy
+
+    return transformed_box

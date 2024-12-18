@@ -104,3 +104,15 @@ class GeneralDotProductAttention(BaseModule):
         # output = output.sum(1)  # (batch,1,channel,size,size)
         # return output
         return attn_orig
+
+@MODELS.register_module()
+class conv_net(BaseModule):
+    def __init__(self, in_channels=256, out_channels=256):
+        super(conv_net, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.conv1 = conv2DBatchNormRelu(self.in_channels, out_channels, k_size=3, stride=1, padding=1)
+
+    def forward(self, features_map):
+        outputs = self.conv1(features_map)
+        return outputs

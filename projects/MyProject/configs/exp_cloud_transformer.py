@@ -70,19 +70,14 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 4 # CLOUD
-num_workers = 4 # CLOUD
+batch_size = 1 if debug else 4 # CLOUD
+num_workers = 1 if debug else 4 # CLOUD
+train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-train_mode = 'single' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new'
-
-# sample_agents = (
-#     'ego_vehicle', 'infrastructure',
-# )
-# sample_agents = (
-#     'ego_vehicle', 'other_vehicle', 'infrastructure',
-# )
+train_mode = 'where' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new'
+decouple_flag = True
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
 ego_name = 'ego_vehicle'
@@ -91,6 +86,7 @@ motion_filter_invalid = False
 corr_only_vehicle = False
 corr_filter_invalid = False
 vehicle_id_list = [0, 1, 2] # agents 'car', 'van', 'truck'
+shared_weights = ['corr_model']
 
 train_pipline = [
     dict(
@@ -267,7 +263,7 @@ train_dataloader = dict(
     drop_last=True,
     sampler=dict(
           type='DefaultSampler',
-          shuffle=True), # CLOUD
+          shuffle=False if debug else True), # CLOUD
     dataset=dict(
         type = 'DeepAccident_V2X_Dataset',
         ann_file = train_annfile_path,
@@ -454,9 +450,8 @@ corr_model = dict(
 
 model = dict(
     type='EgoModel',
-    # corr_model = corr_model,
-    # freeze_inf_model = True,
-    corr_model = None,
+    corr_model = corr_model,
+    freeze_inf_model = True,
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
         delete_pointcloud=delete_pointcloud,
@@ -508,6 +503,67 @@ model = dict(
         upsample_cfg=dict(type='deconv', bias=False),
         use_conv_for_no_stride=True
     ),
+    pts_fusion_layer=dict(
+        type='V2XTransformerFusion',
+        in_channels=sum([128, 128, 128]),
+        n_head=3,
+        mid_channels=256,
+        dense_fusion=True,
+    ),
+    train_comm_expand_layer=dict(
+        type='GaussianConv',
+        kernel_size=train_comm_ksize,
+        sigma=1.0,
+        impl=True,
+    ),
+    # policy_net4=dict(
+    #     type='policy_net4',
+    #     in_channels=384,
+    # ),
+    # linear=dict(
+    #     type='linear',
+    #     in_channels = 128,
+    #     input_feat_sz=256,
+    # ),
+    policy_net4=dict(
+            type='policy_net4',
+            in_channels=36,
+    ),
+    linear=dict(
+        type='linear',
+        in_channels = 128,
+        input_feat_sz=256,
+    ),
+    linear2=dict(
+        type='linear',
+        in_channels = 384,
+        input_feat_sz=4,
+    ),
+    compress_net = dict(
+        type='conv_net',
+        in_channels=384,
+        out_channels=64
+    ),
+    uncompress_net = dict(
+        type='conv_net',
+        in_channels=64,
+        out_channels=384
+    ),
+    when_fusion_layer=dict(
+    type='GeneralDotProductAttention',
+    query_size=128,
+    key_size=128,
+    ),
+    # test_comm_expand_layer=dict(
+    #     type='GaussianConv',
+    #     kernel_size=test_comm_ksize,
+    #     sigma=1.0,
+    #     impl=True,
+    # ),
+    # temporal_backbone=dict(
+    #     type='TemporalIdentity',
+    #     position='last'
+    # ),
     multi_task_head=dict(
         type='MTHead',
         det_head=dict(
@@ -548,6 +604,8 @@ model = dict(
         min_radius=2,
         code_weights=code_weights, # code_size
         train_mode=train_mode,
+        shared_weights=shared_weights,
+        decouple_flag = decouple_flag,
     ),
     pts_test_cfg=dict(
         nms_type='rotate',
@@ -562,13 +620,12 @@ model = dict(
         min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
     ),
     pts_fusion_cfg=dict(
-        corr_thresh = 0.3,
-        train_ego_name=ego_name, # FIXME
-        test_ego_name=ego_name,
-        corr_pc_range=lidar_range,
+        corr_thresh = 0.1,
+        pc_range = lidar_range,
     ),
     co_cfg=dict(
-        infrastructure_name=infrastructure_name
+        infrastructure_name = infrastructure_name,
+        ego_name = ego_name
     )
 )
 
@@ -576,7 +633,6 @@ model = dict(
 
 lr = 1 * 1e-4
 checkpoint_interval = 2
-max_checkpoint_num = 4
 log_interval = 1
 
 log_level = 'INFO'
@@ -591,11 +647,11 @@ default_hooks = dict(
                 sampler_seed=dict(type='DistSamplerSeedHook'),
                 logger=dict(type='LoggerHook', interval=log_interval),
                 param_scheduler=dict(type='ParamSchedulerHook'),
-                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval, max_keep_ckpts= max_checkpoint_num),
+                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
             )
-custom_hooks = [
+custom_hooks = [] if debug else [
     dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/home/wangyichen/gpu_messages')
-] # CLOUD
+]# CLOUD
 
 env_cfg = dict(
     cudnn_benchmark=True,

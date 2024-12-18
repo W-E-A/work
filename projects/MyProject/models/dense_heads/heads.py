@@ -14,7 +14,7 @@ from mmdet3d.registry import MODELS, TASK_UTILS
 from mmdet3d.structures import Det3DDataSample, xywhr2xyxyr
 from mmdet3d.models.dense_heads.centerpoint_head import circle_nms, nms_bev
 import numpy as np
-from ...utils import FeatureWarper
+from ...utils import FeatureWarper, transform_boxes_with_rotation_and_velocity
 from ..loss_utils import CorrelationLoss
 
 
@@ -558,11 +558,16 @@ class CenterHeadModified(BaseModule):
 
     def predict_by_feat(self, preds_dicts: Tuple[List[dict]],
                         batch_input_metas: List[dict],
+                        late_preds_dicts: Tuple[List[dict]] = None,
+                        inf2ego_pose_matrix: list = None,
                         ) -> List[InstanceData]:
         rets = []
         # FIXME single scale only now
         assert isinstance(preds_dicts, Sequence) and isinstance(preds_dicts[0], Sequence) and len(preds_dicts[0]) == 1
         batch_size = len(batch_input_metas)
+        batch_reg_preds = []
+        batch_cls_preds = []
+        batch_cls_labels = []
         for task_id, preds_dict in enumerate(preds_dicts):
             pred_result = preds_dict[0]
             num_class_with_bg = self.num_classes[task_id] # c
@@ -596,6 +601,46 @@ class CenterHeadModified(BaseModule):
             batch_reg_preds = [box['bboxes'] for box in temp] # B * box
             batch_cls_preds = [box['scores'] for box in temp] # B * score
             batch_cls_labels = [box['labels'] for box in temp] # B * score
+            if late_preds_dicts is not None:
+                for task_id, preds_dict in enumerate(late_preds_dicts):
+                    pred_result = preds_dict[0]
+                    num_class_with_bg = self.num_classes[task_id] # c
+                    batch_heatmap = pred_result['heatmap'].sigmoid() # B c H W
+
+                    batch_reg = pred_result['reg'] # B 2 H W
+                    batch_hei = pred_result['height'] # B 1 H W
+
+                    if self.norm_bbox:
+                        batch_dim = torch.exp(pred_result['dim']) # B 3 H W
+                    else:
+                        batch_dim = pred_result['dim']
+
+                    batch_rots = pred_result['rot'][:, 0].unsqueeze(1) # B 1 H W
+                    batch_rotc = pred_result['rot'][:, 1].unsqueeze(1) # B 1 H W
+
+                    if self.with_velocity and 'vel' in pred_result:
+                        batch_vel = pred_result['vel']
+                    else:
+                        batch_vel = None
+                    temp = self.bbox_coder.decode( # FIXME watch this
+                        batch_heatmap,
+                        batch_rots,
+                        batch_rotc,
+                        batch_hei,
+                        batch_dim,
+                        batch_vel,
+                        reg=batch_reg,
+                        task_id=task_id,)
+                    late_batch_reg_preds = [box['bboxes'] for box in temp] # B * box
+                    late_batch_cls_preds = [box['scores'] for box in temp] # B * score
+                    late_batch_cls_labels = [box['labels'] for box in temp] # B * score
+                    for idx, reg_preds in enumerate(late_batch_reg_preds):
+                        reg_preds = transform_boxes_with_rotation_and_velocity(reg_preds, inf2ego_pose_matrix[idx])
+                        mask = (reg_preds[:,0] < 51.2) & (reg_preds[:,0] > -51.2) & (reg_preds[:,1] < 51.2) & (reg_preds[:,1] > -51.2)
+                        batch_reg_preds[idx] = torch.cat([batch_reg_preds[idx],reg_preds[mask]],dim=0)
+                        batch_cls_preds[idx] = torch.cat([batch_cls_preds[idx],late_batch_cls_preds[idx][mask]],dim=0)
+                        batch_cls_labels[idx] = torch.cat([batch_cls_labels[idx],late_batch_cls_labels[idx][mask]],dim=0)
+
             if self.nms_type == 'circle':
                 ret_task = []
                 for i in range(batch_size):

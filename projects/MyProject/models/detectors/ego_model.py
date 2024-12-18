@@ -26,12 +26,14 @@ class EgoModel(MVXTwoStageDetector):
                  pts_fusion_layer: Optional[dict] = None,
                  pts_backbone: Optional[dict] = None,
                  pts_neck: Optional[dict] = None,
-                #  temporal_backbone: Optional[dict] = None,
                  multi_task_head: Optional[dict] = None,
                  train_comm_expand_layer: Optional[dict] = None,
                 #  test_comm_expand_layer: Optional[dict] = None,
                  policy_net4: Optional[dict] = None,
                  linear: Optional[dict] = None,
+                 linear2: Optional[dict] = None,
+                 compress_net: Optional[dict] = None,
+                 uncompress_net: Optional[dict] = None,
                  when_fusion_layer: Optional[dict] = None,
                  pts_train_cfg: Optional[dict] = None,
                  pts_test_cfg: Optional[dict] = None,
@@ -62,7 +64,8 @@ class EgoModel(MVXTwoStageDetector):
 
         if self.pts_train_cfg:
             self.train_mode = self.pts_train_cfg.get('train_mode', 'single') # type: ignore
-            assert self.train_mode in ('single', 'dense', 'where', 'gt_corr', 'pred_corr', 'when')
+            assert self.train_mode in ('single', 'dense', 'where', 'gt_corr', 'pred_corr', 'when', 'new', 'late')
+            self.decouple_flag = self.pts_train_cfg.get('decouple_flag', False)
 
             if freeze_inf_model:
                 for shared_module_name in self.pts_train_cfg.get('shared_weights', []):
@@ -78,6 +81,17 @@ class EgoModel(MVXTwoStageDetector):
             self.query_net = MODELS.build(linear)
             self.key_net = MODELS.build(linear)
             self.attention_net = MODELS.build(when_fusion_layer)
+        
+        if self.train_mode== 'new':
+            self.query_key_net = MODELS.build(policy_net4)
+            self.query_net = MODELS.build(linear)
+            self.key_net = MODELS.build(linear2)
+            self.attention_net = MODELS.build(when_fusion_layer)
+
+        if self.decouple_flag:
+            self.ego_multi_task_head = MODELS.build(multi_task_head)
+            self.compress_net = MODELS.build(compress_net)
+            self.uncompress_net = MODELS.build(uncompress_net)
 
         if self.pts_test_cfg:
             pass
@@ -493,12 +507,59 @@ class EgoModel(MVXTwoStageDetector):
                     # ego_fusion_result = self.attention_net(query, keys, vals)
                 elif self.train_mode == 'dense':
                     warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
+                elif self.train_mode == 'new':
+                    #new2comm
+                    _,C,H,W = warp_infra_feat.shape                        
+                    det_heatmaps = []
+                    for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                        pred_result = preds_dict[0]
+                        det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                    det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                    det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                    comm_mask = (det_heatmap > self.score_threshold).permute(0,2,3,1)  # B H W 1
+                    warp_comm_mask = warp_features(comm_mask.float(), present_pose_matrix, self.warp_size).bool() #B H W 1
+                    mask_flat = warp_comm_mask.view(batch_size,-1)
+                    feat_flat = warp_infra_feat.permute(0,2,3,1).view(batch_size,-1,C)
+                    ego_motion_input = ego_motion_inputs[0].view(batch_size,-1,H,W)
+                    for b in range(batch_size):
+                        ego_motion_input_b = ego_motion_input[b].unsqueeze(0)
+                        feat_flat_b = feat_flat[b]
+                        mask_flat_b = mask_flat[b]
+                        if mask_flat_b.float().sum() > 0:
+                            selected_feat = feat_flat_b[mask_flat_b].unsqueeze(0)
+                            _,N,_ = selected_feat.shape
+                            query_key_map = self.query_key_net(ego_motion_input_b)
+                            query = self.query_net(query_key_map).unsqueeze(0)
+                            keys = self.key_net(selected_feat).unsqueeze(0)
+                            atten = self.attention_net(query, keys).squeeze(-1)
+                            new_mask = torch.zeros_like(mask_flat_b)
+                            new_mask[mask_flat_b]  = atten > (1.0/N)
+                            mask_flat[b] = new_mask
+                    warp_corr_mask = mask_flat.view(batch_size,H,W,-1).permute(0,3,1,2)
+                    warp_corr_mask = self.train_comm_expand_layer(warp_corr_mask.float()) # B 1 H W #
+                    warp_corr_mask = warp_corr_mask > 0.00
+
+                    if self.decouple_flag:
+                        single_feat_dict = self.ego_multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs)
+                        single_det_heatmaps = []
+                        for task_id, preds_dict in enumerate(single_feat_dict['det_feat']):
+                            pred_result = preds_dict[0]
+                            single_det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                        single_det_heatmaps = torch.cat(single_det_heatmaps, dim=1) # B c1+c2+c... H W
+                        single_det_heatmaps = torch.max(single_det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                        single_mask = single_det_heatmaps > self.score_threshold  # B H W 1
+
+                        common_mask = warp_corr_mask & single_mask
+                        compress_feat = self.uncompress_net(self.compress_net(warp_infra_feat))
+                        warp_infra_feat = compress_feat*common_mask.float() + warp_infra_feat*(~common_mask).float()
                 else:
                     if self.train_mode == 'pred_corr':
                         pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
                         corr_mask = pred_corr_heatmap > self.corr_thresh
+                        warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
                     if self.train_mode == 'gt_corr':
                         corr_mask = gt_corr_heatmaps > self.corr_thresh
+                        warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
                     if self.train_mode == 'where':
                         # where2comm
                         det_heatmaps = []
@@ -514,7 +575,23 @@ class EgoModel(MVXTwoStageDetector):
                             ) # B 1 H W
                         comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
                         corr_mask = comm_mask > 0.00 #where2comm进行融合
-                    warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
+                        warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
+                        if self.decouple_flag:
+                            single_feat_dict = self.ego_multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs)
+                            single_det_heatmaps = []
+                            for task_id, preds_dict in enumerate(single_feat_dict['det_feat']):
+                                pred_result = preds_dict[0]
+                                single_det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                            single_det_heatmaps = torch.cat(single_det_heatmaps, dim=1) # B c1+c2+c... H W
+                            single_det_heatmaps = torch.max(single_det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                            single_mask = single_det_heatmaps > self.score_threshold  # B H W 1
+
+                            common_mask = warp_corr_mask & single_mask
+                            compress_feat = self.uncompress_net(self.compress_net(warp_infra_feat))
+                            warp_infra_feat = compress_feat*common_mask.float() + warp_infra_feat*(~common_mask).float()
+                        else:
+                            warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B 1 H W
+                    
                 #融合
                 ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
 
@@ -586,6 +663,65 @@ class EgoModel(MVXTwoStageDetector):
                 #     return []
                 ################################ SHOW EGO SINGLE DETECT RESULT ################################
                 return det_ret_list
+            elif self.train_mode == 'late':
+                det_forward_kwargs = {}
+                ego_feat_dict = self.multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs)
+                #prepare motion label
+                ego_motion_labels = [present_seq[self.ego_id]['ego_motion_label']]
+                ego_motion_labels, ego_motion_inputs = self.corr_model.multi_task_head.corr_head.prepare_ego_labels(ego_motion_labels)
+                #获得路端推理结果
+                det_forward_kwargs = {}
+                motion_forward_kwargs = {
+                    'future_distribution_inputs':None,
+                    'noise':None
+                }
+                corr_forward_kwargs = {
+                    'ego_motion_inputs':ego_motion_inputs
+                }
+                infrastructure_feat_dict = self.corr_model.multi_task_head(
+                infrastructure_features,
+                det_forward_kwargs=det_forward_kwargs,
+                motion_forward_kwargs=motion_forward_kwargs,
+                corr_forward_kwargs=corr_forward_kwargs,
+                ) 
+                
+                present_pose_matrix = []
+                for b in range(batch_size):
+                    present_pose_matrix.append(scene_info[b].pose_matrix[present_idx, self.infrastructure_id, self.ego_id, ...]) # use ego to other1, other2, ... # type: ignore
+                present_pose_matrix = torch.tensor(present_pose_matrix)
+
+                det_pred_kwargs = {
+                'batch_input_metas':ego_metas,
+                'late_preds_dicts':infrastructure_feat_dict['det_feat'],
+                'inf2ego_pose_matrix':present_pose_matrix.to(get_device())
+                }
+                predict_dict = self.multi_task_head.predict(ego_feat_dict,det_pred_kwargs=det_pred_kwargs)
+
+                if 'det_pred' in predict_dict:
+                    det_ret_list = []
+                    pred_result = predict_dict['det_pred'] # add to pred_instances_3d from None to instance of bboxes_3d scores_3d labels_3d
+                    for b in range(batch_size):
+                        sample = Det3DDataSample()
+                        sample.set_metainfo(
+                            dict(
+                                scene_sample_idx = scene_info[b].sample_idx,
+                                scene_name = scene_info[b].scene_name,
+                                agent_name = self.ego_name,
+                                sample_idx = ego_metas[b]['sample_idx'], # type: ignore
+                                box_type_3d = ego_metas[b]['box_type_3d'], # type: ignore
+                                lidar_path = ego_metas[b]['lidar_path'], # type: ignore
+                            )
+                        )
+                        # sample.gt_instances_3d = ego_instances[b] # type: ignore
+                        # sample.gt_instances_3d = coop_instances[b] # type: ignore
+                        sample.gt_instances_3d = corr_instances[b] # type: ignore
+
+                        sample.gt_instances_3d.pop('track_id') # no need array
+                        sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
+                        # sample.gt_instances_3d.pop('coop_isvalid') # no need array
+                        # sample.gt_instances_3d.pop('correlations') # no need array
+                        sample.pred_instances_3d = pred_result[b]
+                        det_ret_list.append(sample)
             else:
                 #prepare motion label
                 ego_motion_labels = [present_seq[self.ego_id]['ego_motion_label']]
@@ -641,6 +777,85 @@ class EgoModel(MVXTwoStageDetector):
                     # ego_fusion_result = self.attention_net(query, keys, vals)
                 elif self.train_mode == 'dense':
                     warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
+                elif self.train_mode == 'new':
+                    #new2comm
+                    _,C,H,W = warp_infra_feat.shape                        
+                    det_heatmaps = []
+                    for task_id, preds_dict in enumerate(infrastructure_feat_dict['det_feat']):
+                        pred_result = preds_dict[0]
+                        det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                    det_heatmaps = torch.cat(det_heatmaps, dim=1) # B c1+c2+c... H W
+                    det_heatmap = torch.max(det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                    ################################ SHOW OBJECT HEATMAP ################################
+                    # single_feat_dict = self.ego_multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs)
+                    # single_det_heatmaps = []
+                    # for task_id, preds_dict in enumerate(single_feat_dict['det_feat']):
+                    #     pred_result = preds_dict[0]
+                    #     single_det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                    # single_det_heatmaps = torch.cat(single_det_heatmaps, dim=1) # B c1+c2+c... H W
+                    # single_det_heatmaps = torch.max(single_det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+
+                    # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+
+                    # maps = det_heatmap[0]
+                    # visualizer.draw_featmap(maps)
+                    # visualizer.just_save(f'./data/vis/object_heatmap/{save_dir}/{self.infrastructure_name}_object_heatmap_pre.png')
+                    # visualizer.clean()
+
+                    # wrap_det_heatmap = warp_features(det_heatmap, present_pose_matrix, self.warp_size) #B C H W
+                    # maps = wrap_det_heatmap[0]
+                    # visualizer.draw_featmap(maps)
+                    # visualizer.just_save(f'./data/vis/object_heatmap/{save_dir}/{self.infrastructure_name}_object_heatmap_post.png')
+                    # visualizer.clean()
+
+                    # maps = single_det_heatmaps[0]
+                    # visualizer.draw_featmap(maps)
+                    # visualizer.just_save(f'./data/vis/object_heatmap/{save_dir}/{self.ego_name}_object_heatmap.png')
+                    # visualizer.clean()
+                    # import pdb
+                    # pdb.set_trace()
+                    # if mode == 'loss': 
+                    #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                    # else:
+                    #     return []
+                    ################################ SHOW OBJECT HEATMAP ################################
+                    comm_mask = (det_heatmap > self.score_threshold).permute(0,2,3,1)  # B H W 1
+                    warp_comm_mask = warp_features(comm_mask.float(), present_pose_matrix, self.warp_size).bool() #B H W 1
+                    mask_flat = warp_comm_mask.view(batch_size,-1)
+                    feat_flat = warp_infra_feat.permute(0,2,3,1).view(batch_size,-1,C)
+                    ego_motion_input = ego_motion_inputs[0].view(batch_size,-1,H,W)
+                    for b in range(batch_size):
+                        ego_motion_input_b = ego_motion_input[b].unsqueeze(0)
+                        feat_flat_b = feat_flat[b]
+                        mask_flat_b = mask_flat[b]
+                        if mask_flat_b.float().sum() > 0:
+                            selected_feat = feat_flat_b[mask_flat_b].unsqueeze(0)
+                            _,N,_ = selected_feat.shape
+                            query_key_map = self.query_key_net(ego_motion_input_b)
+                            query = self.query_net(query_key_map).unsqueeze(0)
+                            keys = self.key_net(selected_feat).unsqueeze(0)
+                            atten = self.attention_net(query, keys).squeeze(-1)
+                            new_mask = torch.zeros_like(mask_flat_b)
+                            new_mask[mask_flat_b]  = atten > (1.0/N)
+                            mask_flat[b] = new_mask
+                    warp_corr_mask = mask_flat.view(batch_size,H,W,-1).permute(0,3,1,2)
+                    warp_corr_mask = self.train_comm_expand_layer(warp_corr_mask.float()) # B 1 H W #
+                    warp_corr_mask = warp_corr_mask > 0.00
+
+                    #decouple_module
+                    if self.decouple_flag:
+                        single_feat_dict = self.ego_multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs)
+                        single_det_heatmaps = []
+                        for task_id, preds_dict in enumerate(single_feat_dict['det_feat']):
+                            pred_result = preds_dict[0]
+                            single_det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                        single_det_heatmaps = torch.cat(single_det_heatmaps, dim=1) # B c1+c2+c... H W
+                        single_det_heatmaps = torch.max(single_det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                        single_mask = single_det_heatmaps > self.score_threshold  # B H W 1
+
+                        common_mask = warp_corr_mask & single_mask
+                        compress_feat = self.uncompress_net(self.compress_net(warp_infra_feat))
+                        warp_infra_feat = compress_feat*common_mask.float() + warp_infra_feat*(~common_mask).float()
                 else:
                     if self.train_mode == 'pred_corr':
                         pred_corr_heatmap = infrastructure_feat_dict['corr_feat'][0][0]['heatmap'].sigmoid()
@@ -652,8 +867,10 @@ class EgoModel(MVXTwoStageDetector):
                         self.corr_iou += corr_iou.item()
                         self.iou_count += 1
                         print("corr_iou:",self.corr_iou / self.iou_count)
+                        warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
                     if self.train_mode == 'gt_corr':
                         corr_mask = gt_corr_heatmaps > self.corr_thresh
+                        warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
                     if self.train_mode == 'where':
                         # where2comm
                         det_heatmaps = []
@@ -669,9 +886,29 @@ class EgoModel(MVXTwoStageDetector):
                             ) # B 1 H W
                         comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
                         corr_mask = comm_mask > 0.00 #where2comm进行融合
-                    warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B C H W
+
+                        if self.decouple_flag:
+                            single_feat_dict = self.ego_multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs)
+                            single_det_heatmaps = []
+                            for task_id, preds_dict in enumerate(single_feat_dict['det_feat']):
+                                pred_result = preds_dict[0]
+                                single_det_heatmaps.append(pred_result['heatmap'].sigmoid())
+                            single_det_heatmaps = torch.cat(single_det_heatmaps, dim=1) # B c1+c2+c... H W
+                            single_det_heatmaps = torch.max(single_det_heatmaps, dim=1, keepdim=True).values # B 1 H W
+                            single_mask = single_det_heatmaps > self.score_threshold  # B H W 1
+
+                            warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B 1 H W
+                            common_mask = warp_corr_mask & single_mask
+                            compress_feat = self.uncompress_net(self.compress_net(warp_infra_feat))
+                            warp_infra_feat = compress_feat*common_mask.float() + warp_infra_feat*(~common_mask).float()
+                        else:
+                            warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B 1 H W
+
                 #计算通信量
-                rate = torch.sum(warp_corr_mask[0] > 0.5) / warp_corr_mask[0].numel()
+                if self.decouple_flag:
+                    rate = (torch.sum(warp_corr_mask > 0.5) -  torch.sum(common_mask > 0.5) +  torch.sum(common_mask > 0.5)*1/6) / warp_corr_mask.numel()
+                else:
+                    rate = torch.sum(warp_corr_mask > 0.5) / warp_corr_mask.numel()
                 self.comm_rate += rate.item()
                 self.comm_count += 1
                 print("comm_rate:", self.comm_rate / self.comm_count)
