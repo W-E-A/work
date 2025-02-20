@@ -75,7 +75,7 @@ num_workers = 4 # CLOUD
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-train_mode = 'single' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new'
+train_mode = 'late' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new'
 
 # sample_agents = (
 #     'ego_vehicle', 'infrastructure',
@@ -450,13 +450,25 @@ corr_model = dict(
             num_heatmap_convs=2,
         ),
     ),
+    pts_test_cfg=dict(
+        nms_type='rotate',
+        post_center_limit_range=det_center_range,
+        score_threshold=0.1,
+        nms_thr=[0.1, 0.1, 0.3, 0.3],
+        nms_rescale_factor=[1.0, [0.7, 0.7], [2.0, 2.0], 4.5],
+        pre_max_size=1000,
+        post_max_size=83,
+        max_per_img=500,
+        max_pool_nms=False,
+        min_radius=[4, 10, 12, 1, 0.85, 0.175], # FIXME circle nms
+    ),
 )
 
 model = dict(
     type='EgoModel',
-    # corr_model = corr_model,
-    # freeze_inf_model = True,
-    corr_model = None,
+    corr_model = corr_model,
+    freeze_inf_model = True,
+    # corr_model = None,
     data_preprocessor=dict(
         type='DeepAccidentDataPreprocessor',
         delete_pointcloud=delete_pointcloud,
@@ -575,8 +587,8 @@ model = dict(
 
 
 lr = 1 * 1e-4
-checkpoint_interval = 2
-max_checkpoint_num = 4
+checkpoint_interval = 1
+max_checkpoint_num = 8
 log_interval = 1
 
 log_level = 'INFO'

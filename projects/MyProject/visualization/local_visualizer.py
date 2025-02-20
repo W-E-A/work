@@ -69,7 +69,50 @@ class SimpleLocalVisualizer(Visualizer):
             points_xy = points_xy[keep_idx]
         xy_voxel = np.clip(np.round((points_xy - self.offset_xy) / self.voxel_size[:2]).astype(np.int32), (0, 0), (self.grid_size[1]-1, self.grid_size[0]-1))
         map_vis = np.zeros((self.grid_size[0], self.grid_size[1], 3), dtype=np.uint8)
+        map_vis[:,:] = 240
         map_vis[xy_voxel[:, 1], xy_voxel[:, 0]] = point_colors
+        self.set_image(map_vis)
+        self.ax_save.set_autoscale_on(False)
+    
+    @master_only
+    def set_diff_points(self, points1, points2, 
+            point_color1: Optional[Union[List[int], int]] = 255, 
+            point_color2: Optional[Union[List[int], int]] = 255):
+        if isinstance(point_color1, Sequence):
+            point_colors1 = np.array(point_color1, dtype=np.uint8)
+            point_colors2 = np.array(point_color2, dtype=np.uint8)
+        else:
+            point_colors1 = np.array([point_color1, point_color1, point_color1], dtype=np.uint8)
+            point_colors2 = np.array([point_color2, point_color2, point_color2], dtype=np.uint8)
+        points_xy1 = points1[:, :2]
+        points_xy2 = points2[:, :2]
+        if self.mask_range:
+            keep_x1 = np.logical_or(
+                    points_xy1[:, 0] < self.mask_range[0],
+                    points_xy1[:, 0] > self.mask_range[3]
+            )
+            keep_y1 = np.logical_or(
+                    points_xy1[:, 1] < self.mask_range[1],
+                    points_xy1[:, 1] > self.mask_range[4]
+            )
+            keep_idx1 = np.logical_or(keep_x1, keep_y1)
+            points_xy2 = points_xy2[keep_idx1]
+            keep_x2 = np.logical_or(
+                    points_xy2[:, 0] < self.mask_range[0],
+                    points_xy2[:, 0] > self.mask_range[3]
+            )
+            keep_y2 = np.logical_or(
+                    points_xy2[:, 1] < self.mask_range[1],
+                    points_xy2[:, 1] > self.mask_range[4]
+            )
+            keep_idx2 = np.logical_or(keep_x2, keep_y2)
+            points_xy2 = points_xy2[keep_idx2]
+        xy_voxel1 = np.clip(np.round((points_xy1 - self.offset_xy) / self.voxel_size[:2]).astype(np.int32), (0, 0), (self.grid_size[1]-1, self.grid_size[0]-1))
+        xy_voxel2 = np.clip(np.round((points_xy2 - self.offset_xy) / self.voxel_size[:2]).astype(np.int32), (0, 0), (self.grid_size[1]-1, self.grid_size[0]-1))
+        map_vis = np.zeros((self.grid_size[0], self.grid_size[1], 3), dtype=np.uint8)
+        map_vis[:,:] = 240
+        map_vis[xy_voxel1[:, 1], xy_voxel1[:, 0]] = point_colors1
+        map_vis[xy_voxel2[:, 1], xy_voxel2[:, 0]] = point_colors2
         self.set_image(map_vis)
         self.ax_save.set_autoscale_on(False)
 

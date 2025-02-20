@@ -142,7 +142,7 @@ class MTHead(BaseModule):
         
         if 'det_feat' in feat_dict:
             multi_tasks_multi_feats = feat_dict['det_feat']
-            predict_dict['det_pred'] = self.det_head.predict_by_feat(multi_tasks_multi_feats, **det_pred_kwargs) # type: ignore
+            predict_dict['det_pred'], predict_dict['sum_comm']  = self.det_head.predict_by_feat(multi_tasks_multi_feats, **det_pred_kwargs) # type: ignore
             # if return_det_heatmaps:
             #     predict_dict['det_pred'] = self.det_head.predict_heatmaps(multi_tasks_multi_feats) # type: ignore
             # else:
@@ -568,6 +568,7 @@ class CenterHeadModified(BaseModule):
         batch_reg_preds = []
         batch_cls_preds = []
         batch_cls_labels = []
+        sum_comm = 0
         for task_id, preds_dict in enumerate(preds_dicts):
             pred_result = preds_dict[0]
             num_class_with_bg = self.num_classes[task_id] # c
@@ -602,44 +603,51 @@ class CenterHeadModified(BaseModule):
             batch_cls_preds = [box['scores'] for box in temp] # B * score
             batch_cls_labels = [box['labels'] for box in temp] # B * score
             if late_preds_dicts is not None:
-                for task_id, preds_dict in enumerate(late_preds_dicts):
-                    pred_result = preds_dict[0]
-                    num_class_with_bg = self.num_classes[task_id] # c
-                    batch_heatmap = pred_result['heatmap'].sigmoid() # B c H W
+                pred_result = late_preds_dicts[task_id][0]
+                num_class_with_bg = self.num_classes[task_id] # c
+                batch_heatmap = pred_result['heatmap'].sigmoid() # B c H W
 
-                    batch_reg = pred_result['reg'] # B 2 H W
-                    batch_hei = pred_result['height'] # B 1 H W
+                batch_reg = pred_result['reg'] # B 2 H W
+                batch_hei = pred_result['height'] # B 1 H W
 
-                    if self.norm_bbox:
-                        batch_dim = torch.exp(pred_result['dim']) # B 3 H W
-                    else:
-                        batch_dim = pred_result['dim']
+                if self.norm_bbox:
+                    batch_dim = torch.exp(pred_result['dim']) # B 3 H W
+                else:
+                    batch_dim = pred_result['dim']
 
-                    batch_rots = pred_result['rot'][:, 0].unsqueeze(1) # B 1 H W
-                    batch_rotc = pred_result['rot'][:, 1].unsqueeze(1) # B 1 H W
+                batch_rots = pred_result['rot'][:, 0].unsqueeze(1) # B 1 H W
+                batch_rotc = pred_result['rot'][:, 1].unsqueeze(1) # B 1 H W
 
-                    if self.with_velocity and 'vel' in pred_result:
-                        batch_vel = pred_result['vel']
-                    else:
-                        batch_vel = None
-                    temp = self.bbox_coder.decode( # FIXME watch this
-                        batch_heatmap,
-                        batch_rots,
-                        batch_rotc,
-                        batch_hei,
-                        batch_dim,
-                        batch_vel,
-                        reg=batch_reg,
-                        task_id=task_id,)
-                    late_batch_reg_preds = [box['bboxes'] for box in temp] # B * box
-                    late_batch_cls_preds = [box['scores'] for box in temp] # B * score
-                    late_batch_cls_labels = [box['labels'] for box in temp] # B * score
-                    for idx, reg_preds in enumerate(late_batch_reg_preds):
-                        reg_preds = transform_boxes_with_rotation_and_velocity(reg_preds, inf2ego_pose_matrix[idx])
-                        mask = (reg_preds[:,0] < 51.2) & (reg_preds[:,0] > -51.2) & (reg_preds[:,1] < 51.2) & (reg_preds[:,1] > -51.2)
-                        batch_reg_preds[idx] = torch.cat([batch_reg_preds[idx],reg_preds[mask]],dim=0)
-                        batch_cls_preds[idx] = torch.cat([batch_cls_preds[idx],late_batch_cls_preds[idx][mask]],dim=0)
-                        batch_cls_labels[idx] = torch.cat([batch_cls_labels[idx],late_batch_cls_labels[idx][mask]],dim=0)
+                if self.with_velocity and 'vel' in pred_result:
+                    batch_vel = pred_result['vel']
+                else:
+                    batch_vel = None
+                temp = self.bbox_coder.decode( # FIXME watch this
+                    batch_heatmap,
+                    batch_rots,
+                    batch_rotc,
+                    batch_hei,
+                    batch_dim,
+                    batch_vel,
+                    reg=batch_reg,
+                    task_id=task_id,)
+                late_batch_reg_preds = [box['bboxes'] for box in temp] # B * box
+                late_batch_cls_preds = [box['scores'] for box in temp] # B * score
+                late_batch_cls_labels = [box['labels'] for box in temp] # B * score
+
+                for idx, cls_preds in enumerate(late_batch_cls_preds):
+                    mask = cls_preds > 0.8
+                    late_batch_reg_preds[idx] = late_batch_reg_preds[idx][mask]
+                    late_batch_cls_preds[idx] = late_batch_cls_preds[idx][mask]
+                    late_batch_cls_labels[idx] = late_batch_cls_labels[idx][mask]
+
+                for idx, reg_preds in enumerate(late_batch_reg_preds):
+                    reg_preds = transform_boxes_with_rotation_and_velocity(reg_preds, inf2ego_pose_matrix[idx])
+                    mask = (reg_preds[:,0] < 51.2) & (reg_preds[:,0] > -51.2) & (reg_preds[:,1] < 51.2) & (reg_preds[:,1] > -51.2)
+                    sum_comm += mask.sum()
+                    batch_reg_preds[idx] = torch.cat([batch_reg_preds[idx],reg_preds[mask]],dim=0)
+                    batch_cls_preds[idx] = torch.cat([batch_cls_preds[idx],late_batch_cls_preds[idx][mask]],dim=0)
+                    batch_cls_labels[idx] = torch.cat([batch_cls_labels[idx],late_batch_cls_labels[idx][mask]],dim=0)
 
             if self.nms_type == 'circle':
                 ret_task = []
@@ -693,7 +701,7 @@ class CenterHeadModified(BaseModule):
             temp_instances.scores_3d = scores # type: ignore
             temp_instances.labels_3d = labels # type: ignore
             ret_list.append(temp_instances)
-        return ret_list
+        return ret_list, sum_comm
 
     def get_task_detections(self, num_class_with_bg, batch_cls_preds,
                             batch_reg_preds, batch_cls_labels, img_metas,

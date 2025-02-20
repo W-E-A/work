@@ -76,8 +76,8 @@ train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大h
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-train_mode = 'where' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new'
-decouple_flag = True
+train_mode = 'new' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new'
+decouple_flag = False
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
 ego_name = 'ego_vehicle'
@@ -632,7 +632,8 @@ model = dict(
 
 
 lr = 1 * 1e-4
-checkpoint_interval = 2
+checkpoint_interval = 1
+max_checkpoint_num = 8
 log_interval = 1
 
 log_level = 'INFO'
@@ -647,7 +648,7 @@ default_hooks = dict(
                 sampler_seed=dict(type='DistSamplerSeedHook'),
                 logger=dict(type='LoggerHook', interval=log_interval),
                 param_scheduler=dict(type='ParamSchedulerHook'),
-                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval),
+                checkpoint=dict(type='CheckpointHook', interval=checkpoint_interval,max_keep_ckpts= max_checkpoint_num),
             )
 custom_hooks = [] if debug else [
     dict(type='ShowGPUMessage', interval=2, log_level='INFO', log_dir='/home/wangyichen/gpu_messages')

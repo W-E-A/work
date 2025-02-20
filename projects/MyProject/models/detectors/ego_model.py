@@ -10,7 +10,7 @@ def log(msg = "" ,level: int = logging.INFO):
     print_log(msg, "current", level)
 from mmdet3d.structures import Det3DDataSample
 from ...visualization import SimpleLocalVisualizer
-from ...utils import warp_features
+from ...utils import warp_features, transform_boxes_with_rotation_and_velocity
 import copy
 import numpy as np
 import random
@@ -112,6 +112,8 @@ class EgoModel(MVXTwoStageDetector):
         self.comm_count = 0
         self.corr_iou = 0.0
         self.iou_count = 0
+        self.sum_comm = 0.0
+        self.late_count = 0
 
     def extract_pts_feat(
         self,
@@ -209,6 +211,75 @@ class EgoModel(MVXTwoStageDetector):
         self.ego_id = co_agents.index(self.ego_name)
         self.ego_idx = temp_dict[self.ego_id]
         present_seq = example_seq[present_idx]
+
+        # ############################### SHOW LIDAR POINTCLOUD BEV ################################
+        # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+        # input_samples_ego = present_seq[self.ego_id]['data_samples'] # batch
+        # input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
+        # ego_instances = []
+        # for samples in input_samples_ego:
+        #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+        #     ego_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+
+        # # coop targets
+        # inf_coop_instances=[]
+        # ego_coop_instances = [samples.gt_instances_3d for samples in input_samples_ego] # 1*B
+        # input_samples_inf = present_seq[self.infrastructure_id]['data_samples'] # batch
+        # for b in range(batch_size):
+        #     ego_coop_instances[b].coop_isvalid = ego_coop_instances[b].bbox_3d_isvalid
+        # for samples in input_samples_inf:
+        #     valid_mask = samples.gt_instances_3d.bbox_3d_isvalid
+        #     inf_coop_instances.append(samples.gt_instances_3d[valid_mask]) # visible targets only
+        # inf_coop_instances = [samples.gt_instances_3d for samples in input_samples_inf] # old all targets
+        # for b in range(batch_size):
+        #     ego_track_id = ego_coop_instances[b].track_id
+        #     # other visible 
+        #     other_track_id = inf_coop_instances[b].track_id
+        #     in_mask = np.isin(ego_track_id, other_track_id)
+        #     new_isvalid = np.zeros_like(ego_coop_instances[b].coop_isvalid)
+        #     new_isvalid[in_mask] = True
+        #     ego_coop_instances[b].coop_isvalid = new_isvalid # global valid bboxes for ego
+        # coop_instances = []
+        # for instance in ego_coop_instances: # type: ignore
+        #     coop_instances.append(instance[instance.coop_isvalid])
+    
+        # present_pose_matrix = []
+        # for b in range(batch_size):
+        #     present_pose_matrix.append(scene_info[b].pose_matrix[present_idx, self.infrastructure_id, self.ego_id, ...]) # use ego to other1, other2, ... # type: ignore
+        # present_pose_matrix = torch.tensor(present_pose_matrix)
+        # if 'points' in present_seq[self.infrastructure_id]['inputs'].keys():
+        #     visualizer.set_points(present_seq[self.infrastructure_id]['inputs']['points'][0].cpu().numpy(), [0,0,255])
+        #     visualizer.just_save(f'./data/vis/lidar_bev/{save_dir}/{self.infrastructure_name}_lidar_bev.png')
+        #     visualizer.clean()
+        # else:
+        #     log("no points to visualize, please check the config file.", logging.WARN)
+        
+        # if 'points' in present_seq[self.ego_id]['inputs'].keys():
+        #     visualizer.set_points(present_seq[self.ego_id]['inputs']['points'][0].cpu().numpy(), [255,0,0])
+        #     visualizer.just_save(f'./data/vis/lidar_bev/{save_dir}/{self.ego_name}_lidar_bev.png')
+        #     visualizer.clean()
+        # else:
+        #     log("no points to visualize, please check the config file.", logging.WARN)
+        
+        # ego_points = present_seq[self.ego_id]['inputs']['points'][0].cpu().numpy()
+        # infra_points = present_seq[self.infrastructure_id]['inputs']['points'][0][:,:3].cpu()
+        # ones = torch.ones_like(infra_points[..., :1])
+        # points_homo = torch.cat([infra_points, ones], dim=-1)
+        # transformed_points_homo = torch.matmul(torch.linalg.inv(present_pose_matrix), points_homo.unsqueeze(-1))
+        # transformed_points = transformed_points_homo.squeeze(-1)[..., :3]
+        # visualizer.set_diff_points(ego_points, transformed_points.numpy(), [255,0,0], [0,0,255])
+        # visualizer.draw_bev_bboxes(coop_instances[0].bboxes_3d, c='#0000FF')
+        # visualizer.draw_bev_bboxes(ego_instances[0].bboxes_3d, c='#FF0000')
+        # visualizer.just_save(f'./data/vis/lidar_bev/{save_dir}/add_lidar_bev_trans.png')
+        # import pdb
+        # pdb.set_trace()
+
+        # if mode == 'loss': 
+        #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+        # else:
+        #     return []
+        # ############################### SHOW LIDAR POINTCLOUD BEV ################################
+
 
         if self.train_mode == 'single':
             # ego的所有输入
@@ -589,8 +660,6 @@ class EgoModel(MVXTwoStageDetector):
                             common_mask = warp_corr_mask & single_mask
                             compress_feat = self.uncompress_net(self.compress_net(warp_infra_feat))
                             warp_infra_feat = compress_feat*common_mask.float() + warp_infra_feat*(~common_mask).float()
-                        else:
-                            warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B 1 H W
                     
                 #融合
                 ego_fusion_result = self.pts_fusion_layer(ego_features[0], warp_infra_feat, warp_corr_mask) # B C H W
@@ -650,13 +719,13 @@ class EgoModel(MVXTwoStageDetector):
                 #     visualizer.set_points_from_npz(result.lidar_path)
                 #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
                 #     # thres = self.score_threshold
-                #     thres = 0.3
+                #     thres = 0.2
                 #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
                 #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
-                #     visualizer.just_save(f'./data/vis/det_result/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+                #     visualizer.just_save(f'./data/vis/det_result2/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
 
-                # # import pdb
-                # # pdb.set_trace()
+                # import pdb
+                # pdb.set_trace()
                 # if mode == 'loss': 
                 #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
                 # else:
@@ -684,7 +753,7 @@ class EgoModel(MVXTwoStageDetector):
                 motion_forward_kwargs=motion_forward_kwargs,
                 corr_forward_kwargs=corr_forward_kwargs,
                 ) 
-                
+
                 present_pose_matrix = []
                 for b in range(batch_size):
                     present_pose_matrix.append(scene_info[b].pose_matrix[present_idx, self.infrastructure_id, self.ego_id, ...]) # use ego to other1, other2, ... # type: ignore
@@ -693,13 +762,17 @@ class EgoModel(MVXTwoStageDetector):
                 det_pred_kwargs = {
                 'batch_input_metas':ego_metas,
                 'late_preds_dicts':infrastructure_feat_dict['det_feat'],
-                'inf2ego_pose_matrix':present_pose_matrix.to(get_device())
+                'inf2ego_pose_matrix':torch.linalg.inv(present_pose_matrix).to(get_device())
                 }
                 predict_dict = self.multi_task_head.predict(ego_feat_dict,det_pred_kwargs=det_pred_kwargs)
 
                 if 'det_pred' in predict_dict:
                     det_ret_list = []
                     pred_result = predict_dict['det_pred'] # add to pred_instances_3d from None to instance of bboxes_3d scores_3d labels_3d
+                    sum_comm = predict_dict['sum_comm']
+                    self.sum_comm += sum_comm/batch_size
+                    self.late_count += 1
+                    print('sum_comm:',self.sum_comm/self.late_count)
                     for b in range(batch_size):
                         sample = Det3DDataSample()
                         sample.set_metainfo(
@@ -718,10 +791,30 @@ class EgoModel(MVXTwoStageDetector):
 
                         sample.gt_instances_3d.pop('track_id') # no need array
                         sample.gt_instances_3d.pop('bbox_3d_isvalid') # no need array
-                        # sample.gt_instances_3d.pop('coop_isvalid') # no need array
+                        sample.gt_instances_3d.pop('coop_isvalid') # no need array
                         # sample.gt_instances_3d.pop('correlations') # no need array
                         sample.pred_instances_3d = pred_result[b]
+                        # sample.pred_instances_3d.bboxes_3d.tensor = transform_boxes_with_rotation_and_velocity(sample.pred_instances_3d.bboxes_3d.tensor, inf2ego_pose_matrix[b])
                         det_ret_list.append(sample)
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
+                # for idx, result in enumerate(det_ret_list):
+                #     visualizer.set_points_from_npz(result.lidar_path)
+                #     visualizer.draw_bev_bboxes(result.gt_instances_3d.bboxes_3d, c='#00FF00')
+                #     # thres = self.score_threshold
+                #     thres = 0.2
+                #     result.pred_instances_3d = result.pred_instances_3d[result.pred_instances_3d['scores_3d'] > thres]
+                #     visualizer.draw_bev_bboxes(result.pred_instances_3d.bboxes_3d, c='#FF0000')
+                #     visualizer.just_save(f'./data/vis/det_result/single_result_{thres}_{self.ego_name}_{result.sample_idx}_{result.scene_name}.png')
+
+                # import pdb
+                # pdb.set_trace()
+                # if mode == 'loss': 
+                #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
+                # else:
+                #     return []
+                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                return det_ret_list
             else:
                 #prepare motion label
                 ego_motion_labels = [present_seq[self.ego_id]['ego_motion_label']]
@@ -886,6 +979,7 @@ class EgoModel(MVXTwoStageDetector):
                             ) # B 1 H W
                         comm_mask = self.train_comm_expand_layer(comm_mask) # B 1 H W # type: ignore
                         corr_mask = comm_mask > 0.00 #where2comm进行融合
+                        warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B 1 H W
 
                         if self.decouple_flag:
                             single_feat_dict = self.ego_multi_task_head(ego_features,det_forward_kwargs=det_forward_kwargs)
@@ -896,13 +990,9 @@ class EgoModel(MVXTwoStageDetector):
                             single_det_heatmaps = torch.cat(single_det_heatmaps, dim=1) # B c1+c2+c... H W
                             single_det_heatmaps = torch.max(single_det_heatmaps, dim=1, keepdim=True).values # B 1 H W
                             single_mask = single_det_heatmaps > self.score_threshold  # B H W 1
-
-                            warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B 1 H W
                             common_mask = warp_corr_mask & single_mask
                             compress_feat = self.uncompress_net(self.compress_net(warp_infra_feat))
                             warp_infra_feat = compress_feat*common_mask.float() + warp_infra_feat*(~common_mask).float()
-                        else:
-                            warp_corr_mask = warp_features(corr_mask.float(), present_pose_matrix, self.warp_size).bool() #B 1 H W
 
                 #计算通信量
                 if self.decouple_flag:
@@ -945,7 +1035,7 @@ class EgoModel(MVXTwoStageDetector):
                         sample.gt_instances_3d.pop('coop_isvalid') # no need array
                         sample.pred_instances_3d = pred_result[b]
                         det_ret_list.append(sample)
-                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                ################################ SHOW EGO DETECT RESULT ################################
                 # visualizer: SimpleLocalVisualizer = SimpleLocalVisualizer.get_current_instance()
                 # for idx, result in enumerate(det_ret_list):
                 #     visualizer.set_points_from_npz(result.lidar_path)
@@ -962,7 +1052,7 @@ class EgoModel(MVXTwoStageDetector):
                 #     return {'fakeloss' : torch.ones(1, dtype=torch.float32, device=get_device(), requires_grad=True)}
                 # else:
                 #     return []
-                ################################ SHOW EGO SINGLE DETECT RESULT ################################
+                ################################ SHOW EGO DETECT RESULT ################################
                 return det_ret_list
 
             

@@ -294,11 +294,11 @@ def transform_boxes_with_rotation_and_velocity(box, transform_matrix):
     使用齐次变换矩阵对box的中心坐标、旋转角度rot和速度向量vx, vy进行变换。
 
     参数:
-        box: Tensor [batch, N, 9]，box数据，包含x, y, z, l, w, h, rot, vx, vy
-        transform_matrix: Tensor [batch, 4, 4]，齐次变换矩阵
+        box: Tensor [N, 9]，box数据，包含x, y, z, l, w, h, rot, vx, vy
+        transform_matrix: Tensor [4, 4]，齐次变换矩阵
 
     返回:
-        transformed_box: Tensor [batch, N, 9]，变换后的box
+        transformed_box: Tensor [N, 9]，变换后的box
     """
     # Step 1: 提取并变换中心坐标 x, y, z
     centers = box[:, :3]  # [N, 3]
