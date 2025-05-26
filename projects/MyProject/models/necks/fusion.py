@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 import math
 import torch.nn.functional as F
+from ..fusion import ConvGRU
 
 @MODELS.register_module()
 class V2XTransformerFusion(BaseModule):
@@ -95,3 +96,41 @@ class V2XTransformerFusion(BaseModule):
         # result = self.decoder(ego_feats, memory) # N E C
         # result = result.view(B, H, W, E, C).permute(0, 3, 4, 1, 2).contiguous() # B E C H W
         # return result
+
+
+@MODELS.register_module()
+class V2VNetFusion(BaseModule):
+    def __init__(self,
+                 in_channels: int,
+                 GRU_H:int,
+                 GRU_W:int,
+                 GRU_num_layers:int,
+                 GRU_kernel_size:List,
+                 init_cfg: Optional[dict] = None,
+                 **kwargs
+                 ):
+        super().__init__(init_cfg)
+
+        self.msg_cnn = nn.Conv2d(in_channels * 2, in_channels, kernel_size=3,
+                                 stride=1, padding=1)
+        self.conv_gru = ConvGRU(input_size=(GRU_H, GRU_W),
+                                input_dim=in_channels * 2,
+                                hidden_dim=[in_channels],
+                                kernel_size=GRU_kernel_size,
+                                num_layers=GRU_num_layers,
+                                batch_first=True,
+                                bias=True,
+                                return_all_layers=False)
+        self.mlp = nn.Linear(in_channels, in_channels)
+       
+
+    def forward(self, ego_feats: Tensor, agent_feats: Tensor, corr_mask: Tensor):
+        #使用mask
+        B, C, H, W = ego_feats.shape
+        all_feats = torch.cat([ego_feats, agent_feats], dim=1) # B C H W
+        message = self.msg_cnn(all_feats)
+        cat_feature = torch.cat([ego_feats, message], dim=1)
+        gru_out = self.conv_gru(cat_feature.unsqueeze(1))[0][0]
+        out = gru_out.squeeze(1)
+        result = self.mlp(out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return result

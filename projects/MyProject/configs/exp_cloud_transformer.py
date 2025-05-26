@@ -76,7 +76,7 @@ train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大h
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-train_mode = 'new' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new'
+train_mode = 'v2vnet' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new', 'v2vnet'
 decouple_flag = False
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
@@ -503,12 +503,20 @@ model = dict(
         upsample_cfg=dict(type='deconv', bias=False),
         use_conv_for_no_stride=True
     ),
+    # pts_fusion_layer=dict(
+    #     type='V2XTransformerFusion',
+    #     in_channels=sum([128, 128, 128]),
+    #     n_head=3,
+    #     mid_channels=256,
+    #     dense_fusion=True,
+    # ),
     pts_fusion_layer=dict(
-        type='V2XTransformerFusion',
+        type='V2VNetFusion',
         in_channels=sum([128, 128, 128]),
-        n_head=3,
-        mid_channels=256,
-        dense_fusion=True,
+        GRU_H=256,
+        GRU_W=256,
+        GRU_num_layers=1,
+        GRU_kernel_size=[[3,3]],
     ),
     train_comm_expand_layer=dict(
         type='GaussianConv',
