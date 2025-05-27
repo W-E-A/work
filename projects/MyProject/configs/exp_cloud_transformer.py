@@ -70,13 +70,13 @@ det_common_heads = dict(
     vel=(2, 2),
 )
 
-batch_size = 1 if debug else 4 # CLOUD
+batch_size = 1 if debug else 1 # CLOUD
 num_workers = 1 if debug else 4 # CLOUD
 train_comm_ksize = 5 # comm kernel size 通信高斯核的大小，用于放大heatmap
 seq_length = 8
 present_idx = 2
 sample_key_interval = 1
-train_mode = 'v2vnet' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new', 'v2vnet'
+train_mode = 'v2xvit' #'single', 'dense', 'late', ''when', 'where', 'gt_corr', 'pred_corr', 'new', 'v2vnet', 'v2xvit'
 decouple_flag = False
 sample_agents = tuple(agents)
 infrastructure_name = 'infrastructure'
@@ -510,13 +510,43 @@ model = dict(
     #     mid_channels=256,
     #     dense_fusion=True,
     # ),
+    # pts_fusion_layer=dict(
+    #     type='V2VNetFusion',
+    #     in_channels=sum([128, 128, 128]),
+    #     GRU_H=256,
+    #     GRU_W=256,
+    #     GRU_num_layers=1,
+    #     GRU_kernel_size=[[3,3]],
+    # ),
     pts_fusion_layer=dict(
-        type='V2VNetFusion',
-        in_channels=sum([128, 128, 128]),
-        GRU_H=256,
-        GRU_W=256,
-        GRU_num_layers=1,
-        GRU_kernel_size=[[3,3]],
+        type='V2XTransformer',
+        args={
+            'encoder':{
+                'num_blocks':1,
+                'depth':3,
+                'in_channels': sum([128, 128, 128]),
+                'cav_att_config':{
+                    'dim':256,
+                    'use_hetero':True,
+                    'heads':8,
+                    'dim_head':32,
+                    'dropout':0.3,
+                },
+                'pwindow_att_config':{
+                    'dim':256,
+                    'heads':[16, 8, 4],
+                    'dim_head':[16, 32, 64],
+                    'dropout':0.3,
+                    'window_size':[4, 8, 16],
+                    'relative_pos_embedding':True,
+                    'fusion_method':'split_attn',
+                },
+                'feed_forward':{
+                    'mlp_dim': 256,
+                    'dropout': 0.3
+                }
+            }
+        }
     ),
     train_comm_expand_layer=dict(
         type='GaussianConv',

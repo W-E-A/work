@@ -64,7 +64,7 @@ class EgoModel(MVXTwoStageDetector):
 
         if self.pts_train_cfg:
             self.train_mode = self.pts_train_cfg.get('train_mode', 'single') # type: ignore
-            assert self.train_mode in ('single', 'dense', 'where', 'gt_corr', 'pred_corr', 'when', 'new', 'late','v2vnet')
+            assert self.train_mode in ('single', 'dense', 'where', 'gt_corr', 'pred_corr', 'when', 'new', 'late','v2vnet','v2xvit')
             self.decouple_flag = self.pts_train_cfg.get('decouple_flag', False)
 
             if freeze_inf_model:
@@ -578,6 +578,8 @@ class EgoModel(MVXTwoStageDetector):
                     # ego_fusion_result = self.attention_net(query, keys, vals)
                 elif self.train_mode == 'v2vnet':
                     warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
+                elif self.train_mode == 'v2xvit':
+                    warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool() 
                 elif self.train_mode == 'dense':
                     warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
                 elif self.train_mode == 'new':
@@ -874,6 +876,8 @@ class EgoModel(MVXTwoStageDetector):
                     warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
                 elif self.train_mode == 'v2vnet':
                     warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool()
+                elif self.train_mode == 'v2xvit':
+                    warp_corr_mask = torch.ones_like(gt_corr_heatmaps, device=get_device()).bool() 
                 elif self.train_mode == 'new':
                     #new2comm
                     _,C,H,W = warp_infra_feat.shape                        
